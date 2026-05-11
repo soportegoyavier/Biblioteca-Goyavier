@@ -1,0 +1,1883 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Biblioteca Goyavier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ─── RESET & BASE ─────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f0f11;
+  --surface:   #17171b;
+  --surface2:  #1e1e24;
+  --border:    #2a2a33;
+  --text:      #e8e8f0;
+  --muted:     #6b6b7e;
+  --accent:    #f5c842;
+  --accent2:   #e8a020;
+  --green:     #3dd68c;
+  --blue:      #5b8dee;
+  --red:       #f05252;
+  --amber:     #f5a623;
+  --sidebar-w: 240px;
+  --radius:    10px;
+  --shadow:    0 4px 24px rgba(0,0,0,.45);
+}
+
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ─── LAYOUT ───────────────────────────────────── */
+.shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ─── SIDEBAR ──────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  z-index: 10;
+}
+
+.sidebar-brand {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-brand .logo-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.sidebar-brand h1 {
+  font-family: 'DM Serif Display', serif;
+  font-size: 15px;
+  color: var(--text);
+  letter-spacing: .02em;
+  line-height: 1.2;
+}
+
+.sidebar-brand span {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.sidebar-section {
+  padding: 12px 10px 4px;
+}
+
+.sidebar-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 8px;
+  margin-bottom: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background .15s, color .15s;
+  user-select: none;
+  margin-bottom: 1px;
+}
+
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+
+.nav-item.active {
+  background: rgba(245,200,66,.12);
+  color: var(--accent);
+}
+
+.nav-item .nav-icon { font-size: 16px; width: 20px; text-align: center; }
+
+.nav-item .nav-badge {
+  margin-left: auto;
+  background: var(--accent);
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 20px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.nav-item.disabled { opacity: .4; cursor: default; }
+.nav-item.disabled:hover { background: transparent; color: var(--muted); }
+
+.nav-item .wip {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--muted);
+  background: var(--border);
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-footer .version {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ─── MAIN CONTENT ─────────────────────────────── */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.topbar {
+  height: 56px;
+  min-height: 56px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 16px;
+  background: var(--surface);
+}
+
+.topbar h2 {
+  font-family: 'DM Serif Display', serif;
+  font-size: 18px;
+  font-weight: 400;
+  flex: 1;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-icon { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: all .15s; }
+
+.btn-icon:hover { background: var(--surface2); color: var(--text); }
+.btn-icon.spinning { animation: spin .8s linear infinite; }
+
+.btn-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(61,214,140,.4);
+  background: rgba(61,214,140,.1);
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all .2s;
+  white-space: nowrap;
+}
+
+.btn-sync:hover { background: rgba(61,214,140,.2); border-color: var(--green); }
+.btn-sync:disabled { opacity: .4; cursor: default; pointer-events: none; }
+
+.btn-sync .sync-spin {
+  display: inline-block;
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.content-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+/* ─── PAGES ─────────────────────────────────────── */
+.page { display: none; animation: fadeIn .2s ease; }
+.page.active { display: block; }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ─── DASHBOARD CARDS ──────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color .2s;
+}
+
+.stat-card:hover { border-color: var(--accent); }
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+}
+
+.stat-card.amber::before  { background: var(--amber); }
+.stat-card.blue::before   { background: var(--blue); }
+.stat-card.green::before  { background: var(--green); }
+.stat-card.accent::before { background: var(--accent); }
+
+.stat-icon {
+  font-size: 22px;
+  margin-bottom: 12px;
+  display: block;
+}
+
+.stat-value {
+  font-family: 'DM Serif Display', serif;
+  font-size: 36px;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: .02em;
+}
+
+/* ─── SECTION HEADER ───────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-family: 'DM Serif Display', serif;
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.section-header .spacer { flex: 1; }
+
+/* ─── FILTER BAR ───────────────────────────────── */
+.filter-bar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.filter-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: inherit;
+}
+
+.filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+.filter-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+
+.search-box {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  min-width: 220px;
+}
+
+.search-box input {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+}
+
+.search-box input::placeholder { color: var(--muted); }
+
+/* ─── TABLE ─────────────────────────────────────── */
+.table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead th {
+  background: var(--surface2);
+  padding: 11px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background .12s;
+}
+
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--surface2); }
+
+tbody td {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.td-id {
+  font-family: 'DM Serif Display', serif;
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.td-muted { color: var(--muted); font-size: 12px; }
+
+/* ─── STATUS BADGE ─────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-pending  { background: rgba(245,166,35,.12);  color: var(--amber); }
+.badge-printed  { background: rgba(91,141,238,.12);  color: var(--blue); }
+.badge-done     { background: rgba(61,214,140,.12);  color: var(--green); }
+.badge-new      { background: rgba(245,200,66,.08);  color: var(--muted); }
+
+/* ─── ACTION BUTTONS ───────────────────────────── */
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  transition: all .15s;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: .35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.btn-recibido  { background: rgba(245,166,35,.15);  color: var(--amber);  border: 1px solid rgba(245,166,35,.3); }
+.btn-recibido:hover  { background: rgba(245,166,35,.28); }
+
+.btn-impreso   { background: rgba(91,141,238,.15);  color: var(--blue);   border: 1px solid rgba(91,141,238,.3); }
+.btn-impreso:hover   { background: rgba(91,141,238,.28); }
+
+.btn-entregado { background: rgba(61,214,140,.15);  color: var(--green);  border: 1px solid rgba(61,214,140,.3); }
+.btn-entregado:hover { background: rgba(61,214,140,.28); }
+
+.btn-archivos  { background: rgba(245,200,66,.08);  color: var(--muted);  border: 1px solid var(--border); }
+.btn-archivos:hover  { color: var(--accent); border-color: var(--accent); background: rgba(245,200,66,.1); }
+
+.btn-primary {
+  background: var(--accent);
+  color: #0f0f11;
+  font-weight: 700;
+  padding: 10px 22px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.btn-primary:hover { background: var(--accent2); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.btn-ghost:hover { background: var(--surface2); color: var(--text); }
+
+/* ─── EMPTY STATE ───────────────────────────────── */
+.empty-state {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-state .icon { font-size: 42px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+
+/* ─── LOADER ─────────────────────────────────────── */
+.loader-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+}
+
+.loader {
+  width: 32px; height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+/* ─── TOAST ──────────────────────────────────────── */
+#toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13.5px;
+  box-shadow: var(--shadow);
+  max-width: 340px;
+  animation: slideIn .25s ease;
+}
+
+.toast.success { border-left: 3px solid var(--green); }
+.toast.error   { border-left: 3px solid var(--red); }
+.toast.info    { border-left: 3px solid var(--blue); }
+
+@keyframes slideIn {
+  from { opacity:0; transform: translateX(24px); }
+  to   { opacity:1; transform: translateX(0); }
+}
+
+@keyframes slideOut {
+  to { opacity:0; transform: translateX(24px); }
+}
+
+/* ─── MODAL ──────────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.72);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  width: 640px;
+  max-width: 95vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+  animation: modalIn .22s ease;
+}
+
+@keyframes modalIn {
+  from { opacity:0; transform: scale(.96) translateY(12px); }
+  to   { opacity:1; transform: scale(1) translateY(0); }
+}
+
+.modal-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.modal-header h3 {
+  font-family: 'DM Serif Display', serif;
+  font-size: 20px;
+  font-weight: 400;
+  flex: 1;
+}
+
+.modal-header .modal-id {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 0 0 8px;
+  transition: color .15s;
+}
+
+.btn-close:hover { color: var(--text); }
+
+.modal-body {
+  padding: 20px 24px;
+}
+
+.modal-footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* ─── FORM ───────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full { grid-column: 1 / -1; }
+
+.form-group label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.form-group label span.req { color: var(--red); margin-left: 2px; }
+
+.form-control {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color .15s;
+  width: 100%;
+}
+
+.form-control:focus { border-color: var(--accent); }
+.form-control::placeholder { color: var(--muted); }
+
+select.form-control {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b6b7e' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L2 5h12z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+textarea.form-control { resize: vertical; min-height: 72px; }
+
+.form-info-box {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.form-info-box strong { color: var(--text); }
+
+/* ─── SCROLLBAR ──────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ─── SPINNER BTN ─────────────────────────────────── */
+.btn.loading { pointer-events: none; }
+.btn.loading::after {
+  content: '';
+  width: 10px; height: 10px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  display: inline-block;
+  margin-left: 4px;
+}
+
+/* ─── DETAIL ROW IN MODAL ─────────────────────────── */
+.detail-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.detail-label { color: var(--muted); min-width: 110px; font-size: 12px; }
+.detail-val   { color: var(--text); font-weight: 500; }
+
+/* ─── RESPONSIVE ─────────────────────────────────── */
+
+/* ─── MOBILE TOP BAR (mes + sync, solo en copias) ── */
+.mobile-top-bar {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.btn-sync-mobile {
+  flex: 1;
+  justify-content: center;
+  min-width: 130px;
+}
+
+@media (max-width: 768px) {
+  .mobile-top-bar { display: flex; }
+  /* En móvil el mes-nav del topbar no es visible (topbar existe pero el mes-nav allí se oculta) */
+  #mes-nav { display: none !important; }
+  #btn-sync { display: none !important; }
+}
+
+@media (min-width: 769px) {
+  .mobile-top-bar { display: none !important; }
+}
+
+/* ─── MOBILE BOTTOM NAV ─────────────────────── */
+.mobile-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 60px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  z-index: 100;
+  padding: 0 8px;
+}
+
+.mobile-nav-items {
+  display: flex;
+  height: 100%;
+  align-items: stretch;
+}
+
+.mobile-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  border-radius: 8px;
+  margin: 6px 2px;
+  transition: background .15s, color .15s;
+  position: relative;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-nav-item .mn-icon { font-size: 22px; line-height: 1; }
+.mobile-nav-item.active { color: var(--accent); background: rgba(245,200,66,.08); }
+
+.mobile-nav-item .mn-badge {
+  position: absolute;
+  top: 4px; right: 10px;
+  background: var(--accent);
+  color: #000;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ─── MES SELECTOR ──────────────────────────── */
+.mes-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mes-nav button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color .15s, background .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mes-nav button:hover { color: var(--accent); background: rgba(245,200,66,.1); }
+.mes-nav button:disabled { opacity: .3; cursor: default; }
+
+.mes-nav .mes-label { color: var(--text); min-width: 120px; text-align: center; font-size: 13px; }
+
+/* ─── CARD LIST (mobile solicitudes) ────────── */
+.card-list { display: flex; flex-direction: column; gap: 10px; }
+
+.sol-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 14px 10px;
+  transition: border-color .15s;
+}
+
+.sol-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sol-card-meta { display: flex; flex-direction: column; gap: 2px; }
+
+.sol-card-id {
+  font-family: 'DM Serif Display', serif;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.sol-card-fecha {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sol-card-asunto {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.35;
+  margin-bottom: 3px;
+}
+
+.sol-card-profesor {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sol-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sol-card-actions .btn {
+  flex: 1;
+  min-width: 70px;
+  justify-content: center;
+  padding: 9px 6px;
+  font-size: 11.5px;
+}
+
+@media (max-width: 768px) {
+  .sidebar { display: none !important; }
+  .mobile-nav { display: flex; }
+
+  /* Scroll normal en móvil */
+  html, body { overflow: auto; height: auto; }
+  .shell { height: auto; overflow: visible; flex-direction: column; padding-bottom: 64px; }
+  .main { overflow: visible; min-height: 100vh; }
+  .content-area { overflow: visible; padding: 14px 12px 24px; }
+
+  .topbar { padding: 0 12px; gap: 8px; }
+  .topbar h2 { font-size: 15px; }
+
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+  .stat-card { padding: 14px 12px; }
+  .stat-value { font-size: 28px; }
+  .stat-label { font-size: 11px; }
+
+  .filter-bar { gap: 6px; flex-wrap: wrap; }
+  .filter-btn { padding: 6px 11px; font-size: 12px; }
+  .search-box { min-width: 0; width: 100%; margin-left: 0; margin-top: 4px; }
+  .mes-nav .mes-label { min-width: 90px; font-size: 12px; }
+
+  /* Tabla oculta en móvil, se reemplaza por cards */
+  .table-wrap { display: none !important; }
+
+  #toast-container { bottom: 70px; right: 12px; left: 12px; }
+  .toast { max-width: 100%; }
+
+  .modal { border-radius: 14px 14px 0 0; max-height: 92vh; }
+  .modal-overlay { align-items: flex-end; padding: 0; }
+  .form-grid { grid-template-columns: 1fr; }
+
+  /* Botones más grandes para touch */
+  .btn { min-height: 38px; }
+  .btn-icon { width: 38px; height: 38px; }
+}
+
+@media (min-width: 769px) {
+  .card-list { display: none !important; }
+  .mobile-nav { display: none !important; }
+  .mes-nav-top-mobile { display: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <nav class="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo-icon">📚</div>
+      <h1>Biblioteca<br>Goyavier</h1>
+      <span>Sistema de Gestión</span>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Principal</div>
+      <div class="nav-item active" data-page="dashboard" onclick="navTo('dashboard', this)">
+        <span class="nav-icon">🏠</span> Dashboard
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Servicios</div>
+      <div class="nav-item" data-page="copias" onclick="navTo('copias', this)">
+        <span class="nav-icon">🖨️</span> Gestión de Copias
+        <span class="nav-badge" id="nav-badge-copias">0</span>
+      </div>
+      <div class="nav-item disabled">
+        <span class="nav-icon">📦</span> Materiales
+        <span class="wip">Pronto</span>
+      </div>
+      <div class="nav-item disabled">
+        <span class="nav-icon">📖</span> Préstamos
+        <span class="wip">Pronto</span>
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="version">v2.0 · Colegio Goyavier</div>
+    </div>
+  </nav>
+
+  <!-- ═══ MAIN ═══ -->
+  <div class="main">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <h2 id="topbar-title">Dashboard</h2>
+      <div class="topbar-actions">
+        <!-- Selector de mes (visible en página copias) -->
+        <div class="mes-nav" id="mes-nav" style="display:none">
+          <button id="btn-mes-ant" onclick="cambiarMes(-1)" title="Mes anterior">‹</button>
+          <span class="mes-label" id="mes-label">—</span>
+          <button id="btn-mes-sig" onclick="cambiarMes(1)" title="Mes siguiente">›</button>
+        </div>
+        <!-- Botón sincronizar (visible en página copias) -->
+        <button class="btn-sync" id="btn-sync" style="display:none" onclick="sincronizar()" title="Sincronizar correos de Gmail">
+          <span id="btn-sync-icon">↻</span> <span id="btn-sync-label">Sincronizar</span>
+        </button>
+        <button class="btn-icon" id="btn-refresh" title="Refrescar datos" onclick="refreshPage()">⟳</button>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content-area">
+
+      <!-- ══ DASHBOARD ══ -->
+      <div class="page active" id="page-dashboard">
+        <div class="stats-grid">
+          <div class="stat-card amber">
+            <span class="stat-icon">⏳</span>
+            <div class="stat-value" id="stat-imprimir">—</div>
+            <div class="stat-label" id="label-imprimir">Pendientes imprimir este mes</div>
+          </div>
+          <div class="stat-card blue">
+            <span class="stat-icon">📬</span>
+            <div class="stat-value" id="stat-entregar">—</div>
+            <div class="stat-label" id="label-entregar">Pendientes de entregar este mes</div>
+          </div>
+          <div class="stat-card green">
+            <span class="stat-icon">✅</span>
+            <div class="stat-value" id="stat-entregadas">—</div>
+            <div class="stat-label">Entregadas este mes</div>
+          </div>
+          <div class="stat-card accent">
+            <span class="stat-icon">📄</span>
+            <div class="stat-value" id="stat-hojas">—</div>
+            <div class="stat-label">Hojas impresas este mes</div>
+          </div>
+        </div>
+
+        <div class="section-header">
+          <div class="section-title">Solicitudes recientes</div>
+        </div>
+
+        <div id="dashboard-recientes">
+          <div class="loader-wrap"><div class="loader"></div></div>
+        </div>
+      </div>
+
+      <!-- ══ GESTIÓN DE COPIAS ══ -->
+      <div class="page" id="page-copias">
+
+        <!-- Barra superior mobile: mes + sync -->
+        <div class="mobile-top-bar">
+          <div class="mes-nav" id="mes-nav-mobile">
+            <button onclick="cambiarMes(-1)">‹</button>
+            <span class="mes-label" id="mes-label-mobile">—</span>
+            <button id="btn-mes-sig-mobile" onclick="cambiarMes(1)">›</button>
+          </div>
+          <button class="btn-sync btn-sync-mobile" id="btn-sync-mobile" onclick="sincronizar()">
+            <span id="btn-sync-icon-mobile">↻</span> Sincronizar
+          </button>
+        </div>
+
+        <div class="filter-bar">
+          <button class="filter-btn active" onclick="setFiltro('', this)">Todas</button>
+          <button class="filter-btn" onclick="setFiltro('✅ Recibido', this)">⏳ Recibido</button>
+          <button class="filter-btn" onclick="setFiltro('🖨️ Impreso', this)">🖨️ Impreso</button>
+          <button class="filter-btn" onclick="setFiltro('📦 Entregado', this)">📦 Entregado</button>
+          <div class="search-box">
+            <span>🔍</span>
+            <input type="text" id="input-buscar" placeholder="Buscar profesor, asunto..." oninput="buscarDebounce()">
+          </div>
+        </div>
+
+        <div id="tabla-wrap">
+          <div class="loader-wrap"><div class="loader"></div></div>
+        </div>
+
+        <!-- Vista cards para móvil -->
+        <div class="card-list" id="card-list"></div>
+
+      </div>
+
+    </div><!-- /content-area -->
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<!-- ═══ MOBILE BOTTOM NAV ═══ -->
+<nav class="mobile-nav">
+  <div class="mobile-nav-items">
+    <div class="mobile-nav-item active" id="mn-dashboard" onclick="navTo('dashboard', null, 'mn-dashboard')">
+      <span class="mn-icon">🏠</span>
+      <span>Dashboard</span>
+    </div>
+    <div class="mobile-nav-item" id="mn-copias" onclick="navTo('copias', null, 'mn-copias')">
+      <span class="mn-icon">🖨️</span>
+      <span>Copias</span>
+      <span class="mn-badge" id="mn-badge-copias" style="display:none">0</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══ MODAL ENTREGA ═══ -->
+<div class="modal-overlay" id="modal-entrega">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3>Registrar Entrega</h3>
+        <div class="modal-id" id="modal-entrega-id"></div>
+      </div>
+      <button class="btn-close" onclick="cerrarModal('modal-entrega')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-info-box" id="modal-entrega-info"></div>
+
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Profesor <span class="req">*</span></label>
+          <input type="text" id="ent-profesor" class="form-control" placeholder="Nombre completo del profesor">
+        </div>
+        <div class="form-group">
+          <label>Área</label>
+          <input type="text" id="ent-area" class="form-control" placeholder="Ej: Ciencias, Humanidades">
+        </div>
+        <div class="form-group">
+          <label>Materia</label>
+          <input type="text" id="ent-materia" class="form-control" placeholder="Ej: Matemáticas">
+        </div>
+        <div class="form-group">
+          <label>Tipo de Impresión</label>
+          <select id="ent-tipo-impresion" class="form-control">
+            <option value="">Seleccionar...</option>
+            <option>Blanco y negro</option>
+            <option>Color</option>
+            <option>Doble cara B&N</option>
+            <option>Doble cara color</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Tipo de Hoja</label>
+          <select id="ent-tipo-hoja" class="form-control">
+            <option value="">Seleccionar...</option>
+            <option>Carta</option>
+            <option>Oficio</option>
+            <option>A4</option>
+            <option>Cartulina</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Número de Hojas</label>
+          <input type="number" id="ent-num-hojas" class="form-control" placeholder="0" min="0">
+        </div>
+        <div class="form-group">
+          <label>Tipo de Documento</label>
+          <select id="ent-tipo-documento" class="form-control">
+            <option value="">Seleccionar...</option>
+            <option>Taller</option>
+            <option>Evaluación</option>
+            <option>Guía</option>
+            <option>Circular</option>
+            <option>Otro</option>
+          </select>
+        </div>
+        <div class="form-group full">
+          <label>Nombre de quien recibe <span class="req">*</span></label>
+          <input type="text" id="ent-nombre-recibe" class="form-control" placeholder="Nombre completo">
+        </div>
+        <div class="form-group full">
+          <label>Observaciones</label>
+          <textarea id="ent-observaciones" class="form-control" placeholder="Notas adicionales (opcional)"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-entrega')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar-entrega" onclick="confirmarEntrega()">
+        Confirmar Entrega
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL DETALLE ═══ -->
+<div class="modal-overlay" id="modal-detalle">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <h3>Detalle de Solicitud</h3>
+        <div class="modal-id" id="modal-detalle-id"></div>
+      </div>
+      <button class="btn-close" onclick="cerrarModal('modal-detalle')">✕</button>
+    </div>
+    <div class="modal-body" id="modal-detalle-body">
+      <div class="loader-wrap"><div class="loader"></div></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-detalle')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TOAST ═══ -->
+<div id="toast-container"></div>
+
+<script>
+// ════════════════════════════════════════════════
+// CONFIGURACIÓN
+// ════════════════════════════════════════════════
+// ⚠️ REEMPLAZAR con la URL de tu Web App desplegada
+const WEBAPP_URL = "https://script.google.com/macros/s/AKfycbyRzdidHhSd_PtEPMG-Gmowjd_7_1xqIjIM0z6ismI2V39veWnXZ1wEwtYEOhXFosYf/exec";
+
+// ════════════════════════════════════════════════
+// ESTADO GLOBAL (solo para UI, NUNCA para datos)
+// ════════════════════════════════════════════════
+let _paginaActual  = "dashboard";
+let _filtroEstado  = "";
+let _buscarTimer   = null;
+let _filaActual    = null;   // fila del modal entrega
+
+// Control de mes para la página copias
+const _hoy = new Date();
+let _mesMostrado = _hoy.getMonth();   // 0-based
+let _anoMostrado = _hoy.getFullYear();
+
+const _MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+// ════════════════════════════════════════════════
+// API CALL
+// ════════════════════════════════════════════════
+// ── API CALL (JSONP) ──────────────────────────────────────────
+// Usa JSONP en lugar de fetch() para evitar errores CORS.
+// Funciona desde Live Server (localhost), file://, y desde GAS.
+// El backend recibe ?callback=xxx y envuelve la respuesta.
+function api(accion, params = {}) {
+  return new Promise((resolve, reject) => {
+    // Nombre único para el callback global
+    const cbName = "_cb_" + Date.now() + "_" + Math.floor(Math.random() * 1e5);
+
+    // Timeout de seguridad: 30 segundos
+    const timer = setTimeout(() => {
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+      reject(new Error("Timeout: el servidor tardó demasiado en responder."));
+    }, 30000);
+
+    // Registrar el callback global que GAS va a invocar
+    window[cbName] = function(data) {
+      clearTimeout(timer);
+      delete window[cbName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+      if (data && data.error) reject(new Error(data.error));
+      else resolve(data);
+    };
+
+    // Construir la URL con payload + callback
+    const payload = encodeURIComponent(JSON.stringify({ accion, ...params }));
+    const url = WEBAPP_URL + "?payload=" + payload + "&callback=" + cbName;
+
+    // Inyectar <script> (sin restricciones CORS)
+    const script = document.createElement("script");
+    script.src = url;
+    script.onerror = function() {
+      clearTimeout(timer);
+      delete window[cbName];
+      reject(new Error("Error de red al contactar el servidor. Verifica la WEBAPP_URL."));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+// ════════════════════════════════════════════════
+// NAVEGACIÓN
+// ════════════════════════════════════════════════
+function navTo(page, el, mobileId) {
+  // Desktop sidebar
+  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+  // Mobile nav
+  document.querySelectorAll(".mobile-nav-item").forEach(n => n.classList.remove("active"));
+  // Pages
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+
+  if (el) el.classList.add("active");
+  // También activar nav item del sidebar si existe
+  const sidebarItem = document.querySelector(`.nav-item[data-page="${page}"]`);
+  if (sidebarItem) sidebarItem.classList.add("active");
+  // Mobile
+  if (mobileId) document.getElementById(mobileId)?.classList.add("active");
+
+  document.getElementById("page-" + page).classList.add("active");
+
+  const titulos = { dashboard: "Dashboard", copias: "Gestión de Copias" };
+  document.getElementById("topbar-title").textContent = titulos[page] || page;
+  _paginaActual = page;
+
+  // Mostrar/ocultar selector de mes y botón sync
+  const mesNav  = document.getElementById("mes-nav");
+  const btnSync = document.getElementById("btn-sync");
+  const esCopias = (page === "copias");
+  if (mesNav)  mesNav.style.display  = esCopias ? "" : "none";
+  if (btnSync) btnSync.style.display = esCopias ? "" : "none";
+
+  cargarPagina(page);
+}
+
+function refreshPage() {
+  const btn = document.getElementById("btn-refresh");
+  btn.classList.add("spinning");
+  cargarPagina(_paginaActual, () => btn.classList.remove("spinning"));
+}
+
+function cargarPagina(page, cb) {
+  if (page === "dashboard") cargarDashboard(cb);
+  if (page === "copias")    cargarSolicitudes(cb);
+}
+
+// ════════════════════════════════════════════════
+// DASHBOARD
+// ════════════════════════════════════════════════
+async function cargarDashboard(cb) {
+  try {
+    const data = await api("getDashboard");
+    document.getElementById("stat-imprimir").textContent   = data.pendientesImprimir;
+    document.getElementById("stat-entregar").textContent   = data.pendientesEntregar;
+    document.getElementById("stat-entregadas").textContent = data.entregadas;
+    document.getElementById("stat-hojas").textContent      = data.totalHojasMes;
+
+    // Alertas operacionales en las cards
+    const opImprimir = data.opPendientesImprimir || 0;
+    const opEntregar = data.opPendientesEntregar || 0;
+    if (opImprimir > 0) {
+      const cardImp = document.querySelector(".stat-card.amber .stat-label");
+      if (cardImp) cardImp.innerHTML =
+        `Pendientes imprimir este mes<br><span style="font-size:11px;color:var(--amber)">⚠️ Total sin imprimir: ${opImprimir}</span>`;
+    }
+    if (opEntregar > 0) {
+      const cardEnt = document.querySelector(".stat-card.blue .stat-label");
+      if (cardEnt) cardEnt.innerHTML =
+        `Pendientes de entregar este mes<br><span style="font-size:11px;color:var(--blue)">⚠️ Total sin entregar: ${opEntregar}</span>`;
+    }
+
+    // Badge sidebar + mobile → operacionales totales
+    const totalOp = opImprimir + opEntregar;
+    const badgeEl = document.getElementById("nav-badge-copias");
+    if (badgeEl) { badgeEl.textContent = totalOp; badgeEl.style.display = totalOp > 0 ? "" : "none"; }
+    const mnBadge = document.getElementById("mn-badge-copias");
+    if (mnBadge) { mnBadge.textContent = totalOp; mnBadge.style.display = totalOp > 0 ? "" : "none"; }
+
+    // Recientes: solo del mes actual
+    const sol = await api("getSolicitudes", { mes: _hoy.getMonth(), ano: _hoy.getFullYear() });
+    renderRecientes(sol.solicitudes.slice(0, 6));
+  } catch (e) {
+    toast("Error al cargar dashboard: " + e.message, "error");
+  } finally {
+    if (cb) cb();
+  }
+}
+
+function renderRecientes(rows) {
+  const cont = document.getElementById("dashboard-recientes");
+  if (!rows.length) {
+    cont.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>Sin solicitudes recientes</p></div>`;
+    return;
+  }
+
+  const html = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>ID</th><th>Fecha</th><th>Profesor</th><th>Asunto</th><th>Estado</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td class="td-id">${r.idSolicitud || "—"}</td>
+              <td class="td-muted">${r.fecha}</td>
+              <td>${r.profesor || r.remitente || "—"}</td>
+              <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.asunto}">${r.asunto}</td>
+              <td>${estadoBadge(r.estado)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  cont.innerHTML = html;
+}
+
+// ════════════════════════════════════════════════
+// CONTROL DE MES
+// ════════════════════════════════════════════════
+function actualizarMesLabel() {
+  const texto = _MESES[_mesMostrado] + " " + _anoMostrado;
+  const label = document.getElementById("mes-label");
+  if (label) label.textContent = texto;
+  const labelM = document.getElementById("mes-label-mobile");
+  if (labelM) labelM.textContent = texto;
+
+  // Deshabilitar botón "siguiente" si ya es el mes actual
+  const hoy = new Date();
+  const esMesActual = (_anoMostrado === hoy.getFullYear() && _mesMostrado === hoy.getMonth());
+  const btnSig  = document.getElementById("btn-mes-sig");
+  const btnSigM = document.getElementById("btn-mes-sig-mobile");
+  if (btnSig)  btnSig.disabled  = esMesActual;
+  if (btnSigM) btnSigM.disabled = esMesActual;
+}
+
+function cambiarMes(delta) {
+  _mesMostrado += delta;
+  if (_mesMostrado < 0)  { _mesMostrado = 11; _anoMostrado--; }
+  if (_mesMostrado > 11) { _mesMostrado = 0;  _anoMostrado++; }
+  actualizarMesLabel();
+  cargarSolicitudes();
+}
+
+// ════════════════════════════════════════════════
+// SINCRONIZAR CORREOS DESDE GMAIL
+// ════════════════════════════════════════════════
+async function sincronizar() {
+  const btn    = document.getElementById("btn-sync");
+  const btnM   = document.getElementById("btn-sync-mobile");
+  const icon   = document.getElementById("btn-sync-icon");
+  const iconM  = document.getElementById("btn-sync-icon-mobile");
+  const label  = document.getElementById("btn-sync-label");
+
+  [btn, btnM].forEach(b => { if (b) b.disabled = true; });
+  if (icon)  { icon.className  = "sync-spin"; icon.textContent  = "↻"; }
+  if (iconM) { iconM.className = "sync-spin"; iconM.textContent = "↻"; }
+  if (label) label.textContent = "Sincronizando...";
+
+  try {
+    const res = await api("sincronizarCorreos", {
+      mes: _mesMostrado,
+      ano: _anoMostrado
+    });
+
+    const msg = res.agregados === 0
+      ? `Sin correos nuevos en ${_MESES[_mesMostrado]} ${_anoMostrado}`
+      : `✅ ${res.agregados} correo${res.agregados !== 1 ? "s" : ""} nuevo${res.agregados !== 1 ? "s" : ""} importado${res.agregados !== 1 ? "s" : ""}`;
+
+    toast(msg + (res.rechazados > 0 ? ` · ${res.rechazados} no autorizados` : ""), "success");
+
+    await cargarSolicitudes();
+    actualizarBadges();
+
+  } catch (e) {
+    toast("Error al sincronizar: " + e.message, "error");
+  } finally {
+    [btn, btnM].forEach(b => { if (b) b.disabled = false; });
+    if (icon)  { icon.className  = ""; icon.textContent  = "↻"; }
+    if (iconM) { iconM.className = ""; iconM.textContent = "↻"; }
+    if (label) label.textContent = "Sincronizar";
+  }
+}
+
+// ════════════════════════════════════════════════
+// SOLICITUDES
+// ════════════════════════════════════════════════
+async function cargarSolicitudes(cb) {
+  document.getElementById("tabla-wrap").innerHTML =
+    `<div class="loader-wrap"><div class="loader"></div></div>`;
+  document.getElementById("card-list").innerHTML =
+    `<div class="loader-wrap"><div class="loader"></div></div>`;
+
+  const buscar = document.getElementById("input-buscar")?.value || "";
+
+  try {
+    const data = await api("getSolicitudes", {
+      filtroEstado: _filtroEstado,
+      buscar,
+      mes: _mesMostrado,
+      ano: _anoMostrado
+    });
+    renderTabla(data.solicitudes);
+    renderCards(data.solicitudes);
+  } catch (e) {
+    document.getElementById("tabla-wrap").innerHTML =
+      `<div class="empty-state"><div class="icon">⚠️</div><p>${e.message}</p></div>`;
+    document.getElementById("card-list").innerHTML =
+      `<div class="empty-state"><div class="icon">⚠️</div><p>${e.message}</p></div>`;
+    toast("Error: " + e.message, "error");
+  } finally {
+    if (cb) cb();
+  }
+}
+
+function renderTabla(rows) {
+  const wrap = document.getElementById("tabla-wrap");
+
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>No se encontraron solicitudes en ${_MESES[_mesMostrado]} ${_anoMostrado}</p></div>`;
+    return;
+  }
+
+  const html = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>ID</th>
+          <th>Fecha</th>
+          <th>Profesor</th>
+          <th>Asunto</th>
+          <th>Estado</th>
+          <th>Hojas</th>
+          <th>Tipo</th>
+          <th>Acciones</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => renderFila(r)).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  wrap.innerHTML = html;
+}
+
+// ════════════════════════════════════════════════
+// RENDER CARDS (móvil)
+// ════════════════════════════════════════════════
+function renderCards(rows) {
+  const cont = document.getElementById("card-list");
+  if (!rows.length) {
+    cont.innerHTML = `<div class="empty-state"><div class="icon">📭</div><p>No hay solicitudes en ${_MESES[_mesMostrado]} ${_anoMostrado}</p></div>`;
+    return;
+  }
+
+  cont.innerHTML = rows.map(r => {
+    const estado = r.estado || "";
+    const esNuevo    = !estado;
+    const esRecibido = estado.includes("Recibido");
+    const esImpreso  = estado.includes("Impreso");
+    const esEntregado= estado.includes("Entregado");
+
+    const btnRec = `<button class="btn btn-recibido" ${(esEntregado||esImpreso||esRecibido)?"disabled":""} onclick="marcarRecibido(${r.fila},this)">✅ Recibido</button>`;
+    const btnImp = `<button class="btn btn-impreso" ${!esRecibido?"disabled":""} onclick="marcarImpreso(${r.fila},this)">🖨️ Impreso</button>`;
+    const btnEnt = `<button class="btn btn-entregado" ${!esImpreso?"disabled":""} onclick="abrirModalEntrega(${r.fila})">📦 Entregar</button>`;
+    const btnArch = r.carpetaLink
+      ? `<button class="btn btn-archivos" onclick="window.open('${r.carpetaLink}','_blank')">📁 Drive</button>`
+      : `<button class="btn btn-archivos" disabled>📁</button>`;
+
+    return `
+      <div class="sol-card" id="card-${r.fila}">
+        <div class="sol-card-header">
+          <div class="sol-card-meta">
+            <span class="sol-card-id" onclick="verDetalle(${r.fila})" style="cursor:pointer">${r.idSolicitud || "Sin ID"}</span>
+            <span class="sol-card-fecha">${r.fecha}</span>
+          </div>
+          ${estadoBadge(estado)}
+        </div>
+        <div class="sol-card-asunto" title="${r.asunto}">${r.asunto}</div>
+        <div class="sol-card-profesor">${r.profesor || r.remitente || "—"}</div>
+        <div class="sol-card-actions">
+          ${btnRec}${btnImp}${btnEnt}${btnArch}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function renderFila(r) {
+  const estado = r.estado || "";
+
+  const esNuevo    = !estado || estado === "";
+  const esRecibido = estado === "✅ Recibido";
+  const esImpreso  = estado === "🖨️ Impreso";
+  const esEntregado= estado === "📦 Entregado";
+
+  // Botones con lógica de estado
+  const btnRecibido = `
+    <button class="btn btn-recibido" title="Marcar como Recibido"
+      ${esEntregado || esImpreso || esRecibido ? "disabled" : ""}
+      onclick="marcarRecibido(${r.fila}, this)">
+      ✅ Recibido
+    </button>`;
+
+  const btnImpreso = `
+    <button class="btn btn-impreso" title="Marcar como Impreso"
+      ${!esRecibido ? "disabled" : ""}
+      onclick="marcarImpreso(${r.fila}, this)">
+      🖨️ Impreso
+    </button>`;
+
+  const btnEntregado = `
+    <button class="btn btn-entregado" title="Registrar Entrega"
+      ${!esImpreso ? "disabled" : ""}
+      onclick="abrirModalEntrega(${r.fila})">
+      📦 Entregar
+    </button>`;
+
+  const btnArchivos = r.carpetaLink
+    ? `<button class="btn btn-archivos" title="Ver archivos en Drive"
+        onclick="window.open('${r.carpetaLink}','_blank')">📁</button>`
+    : `<button class="btn btn-archivos" title="Sin carpeta" disabled>📁</button>`;
+
+  return `
+    <tr id="fila-${r.fila}">
+      <td class="td-id" style="cursor:pointer" onclick="verDetalle(${r.fila})" title="Ver detalle">
+        ${r.idSolicitud || "<span style='color:var(--muted)'>Pendiente</span>"}
+      </td>
+      <td class="td-muted">${r.fecha}</td>
+      <td>${r.profesor || `<span class="td-muted">${r.remitente || "—"}</span>`}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.asunto}">
+        ${r.asunto}
+      </td>
+      <td>${estadoBadge(estado)}</td>
+      <td class="td-muted">${r.numHojas || "—"}</td>
+      <td class="td-muted">${r.tipoImpresion || "—"}</td>
+      <td>
+        <div class="actions">
+          ${btnRecibido}${btnImpreso}${btnEntregado}${btnArchivos}
+        </div>
+      </td>
+    </tr>`;
+}
+
+// ════════════════════════════════════════════════
+// BADGE HELPER
+// ════════════════════════════════════════════════
+function estadoBadge(estado) {
+  if (!estado) return `<span class="badge badge-new">Sin estado</span>`;
+  if (estado.includes("Recibido")) return `<span class="badge badge-pending">⏳ Recibido</span>`;
+  if (estado.includes("Impreso"))  return `<span class="badge badge-printed">🖨️ Impreso</span>`;
+  if (estado.includes("Entregado"))return `<span class="badge badge-done">✅ Entregado</span>`;
+  return `<span class="badge badge-new">${estado}</span>`;
+}
+
+// ════════════════════════════════════════════════
+// MARCAR RECIBIDO
+// ════════════════════════════════════════════════
+async function marcarRecibido(fila, btn) {
+  if (!confirm("¿Confirmar solicitud como Recibida?\nSe enviará un correo de confirmación al solicitante.")) return;
+
+  btn.classList.add("loading");
+  btn.disabled = true;
+
+  try {
+    const data = await api("actualizarEstado", {
+      fila,
+      nuevoEstado: "✅ Recibido",
+      accion: "marcarRecibido"
+    });
+
+    toast(`✅ Marcado como Recibido. ID: ${data.idSolicitud}`, "success");
+    await cargarSolicitudes();
+    actualizarBadges();
+  } catch (e) {
+    toast("Error: " + e.message, "error");
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }
+}
+
+// ════════════════════════════════════════════════
+// MARCAR IMPRESO
+// ════════════════════════════════════════════════
+async function marcarImpreso(fila, btn) {
+  if (!confirm("¿Confirmar que la impresión fue completada?\nSe notificará al solicitante que puede pasar a recoger.")) return;
+
+  btn.classList.add("loading");
+  btn.disabled = true;
+
+  try {
+    await api("actualizarEstado", {
+      fila,
+      nuevoEstado: "🖨️ Impreso",
+      accion: "marcarImpreso"
+    });
+
+    toast("🖨️ Marcado como Impreso. Correo enviado.", "success");
+    await cargarSolicitudes();
+    actualizarBadges();
+  } catch (e) {
+    toast("Error: " + e.message, "error");
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }
+}
+
+// ════════════════════════════════════════════════
+// MODAL ENTREGA
+// ════════════════════════════════════════════════
+async function abrirModalEntrega(fila) {
+  _filaActual = fila;
+  limpiarFormEntrega();
+
+  document.getElementById("modal-entrega-id").textContent = "Cargando...";
+  document.getElementById("modal-entrega-info").innerHTML =
+    `<div class="loader-wrap" style="padding:12px"><div class="loader"></div></div>`;
+  document.getElementById("modal-entrega").classList.add("open");
+
+  try {
+    const d = await api("getSolicitudDetalle", { fila });
+
+    document.getElementById("modal-entrega-id").textContent = d.idSolicitud || "Sin ID";
+    document.getElementById("modal-entrega-info").innerHTML = `
+      <strong>${d.asunto}</strong><br>
+      De: ${d.remitente} &nbsp;·&nbsp; Destino: ${d.emailDestino}
+    `;
+
+    // Pre-llenar campos si existen en el Sheet
+    if (d.profesor)      document.getElementById("ent-profesor").value       = d.profesor;
+    if (d.area)          document.getElementById("ent-area").value           = d.area;
+    if (d.materia)       document.getElementById("ent-materia").value        = d.materia;
+    if (d.tipoImpresion) document.getElementById("ent-tipo-impresion").value = d.tipoImpresion;
+    if (d.tipoHoja)      document.getElementById("ent-tipo-hoja").value      = d.tipoHoja;
+    if (d.numHojas)      document.getElementById("ent-num-hojas").value      = d.numHojas;
+    if (d.tipoDocumento) document.getElementById("ent-tipo-documento").value = d.tipoDocumento;
+    if (d.observaciones) document.getElementById("ent-observaciones").value  = d.observaciones;
+
+  } catch (e) {
+    document.getElementById("modal-entrega-info").innerHTML =
+      `<span style="color:var(--red)">Error al cargar detalle: ${e.message}</span>`;
+  }
+}
+
+function limpiarFormEntrega() {
+  ["ent-profesor","ent-area","ent-materia","ent-num-hojas","ent-nombre-recibe","ent-observaciones"]
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+  ["ent-tipo-impresion","ent-tipo-hoja","ent-tipo-documento"]
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+}
+
+async function confirmarEntrega() {
+  if (!_filaActual) { toast("Fila no definida", "error"); return; }
+
+  const profesor     = document.getElementById("ent-profesor").value.trim();
+  const nombreRecibe = document.getElementById("ent-nombre-recibe").value.trim();
+
+  if (!profesor)     { toast("El nombre del profesor es obligatorio", "error"); document.getElementById("ent-profesor").focus(); return; }
+  if (!nombreRecibe) { toast("El nombre de quien recibe es obligatorio", "error"); document.getElementById("ent-nombre-recibe").focus(); return; }
+
+  const btn = document.getElementById("btn-guardar-entrega");
+  btn.classList.add("loading");
+  btn.disabled = true;
+
+  const params = {
+    fila:          _filaActual,
+    profesor,
+    area:          document.getElementById("ent-area").value.trim(),
+    materia:       document.getElementById("ent-materia").value.trim(),
+    tipoImpresion: document.getElementById("ent-tipo-impresion").value,
+    tipoHoja:      document.getElementById("ent-tipo-hoja").value,
+    numHojas:      parseInt(document.getElementById("ent-num-hojas").value) || 0,
+    tipoDocumento: document.getElementById("ent-tipo-documento").value,
+    nombreRecibe,
+    observaciones: document.getElementById("ent-observaciones").value.trim(),
+  };
+
+  try {
+    await api("guardarEntrega", params);
+    toast("📦 Entrega registrada correctamente. Correo enviado.", "success");
+    cerrarModal("modal-entrega");
+    await cargarSolicitudes();
+    actualizarBadges();
+  } catch (e) {
+    toast("Error al guardar: " + e.message, "error");
+  } finally {
+    btn.classList.remove("loading");
+    btn.disabled = false;
+  }
+}
+
+// ════════════════════════════════════════════════
+// MODAL DETALLE
+// ════════════════════════════════════════════════
+async function verDetalle(fila) {
+  document.getElementById("modal-detalle-id").textContent = "";
+  document.getElementById("modal-detalle-body").innerHTML =
+    `<div class="loader-wrap"><div class="loader"></div></div>`;
+  document.getElementById("modal-detalle").classList.add("open");
+
+  try {
+    const d = await api("getSolicitudDetalle", { fila });
+    document.getElementById("modal-detalle-id").textContent = d.idSolicitud || "Sin ID";
+
+    document.getElementById("modal-detalle-body").innerHTML = `
+      <div class="detail-row"><span class="detail-label">Asunto</span><span class="detail-val">${d.asunto || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Remitente</span><span class="detail-val">${d.remitente || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Email destino</span><span class="detail-val">${d.emailDestino || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Estado</span><span class="detail-val">${estadoBadge(d.estado)}</span></div>
+      <div class="detail-row"><span class="detail-label">Fecha</span><span class="detail-val">${d.fecha || "—"}</span></div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+      <div class="detail-row"><span class="detail-label">Profesor</span><span class="detail-val">${d.profesor || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Área</span><span class="detail-val">${d.area || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Materia</span><span class="detail-val">${d.materia || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Tipo impresión</span><span class="detail-val">${d.tipoImpresion || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Tipo hoja</span><span class="detail-val">${d.tipoHoja || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Nº hojas</span><span class="detail-val">${d.numHojas || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Tipo documento</span><span class="detail-val">${d.tipoDocumento || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Recibió</span><span class="detail-val">${d.nombreRecibe || "—"}</span></div>
+      <div class="detail-row"><span class="detail-label">Adjuntos</span><span class="detail-val">${d.numAdjuntos}</span></div>
+      ${d.observaciones ? `<div class="detail-row"><span class="detail-label">Observaciones</span><span class="detail-val">${d.observaciones}</span></div>` : ""}
+      ${d.cuerpo ? `
+        <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+        <div class="detail-label" style="margin-bottom:6px">Cuerpo del mensaje</div>
+        <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12.5px;color:var(--muted);white-space:pre-wrap;max-height:140px;overflow-y:auto">${d.cuerpo}</div>
+      ` : ""}
+      ${d.carpetaLink ? `
+        <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+        <a href="${d.carpetaLink}" target="_blank" class="btn btn-archivos" style="display:inline-flex">
+          📁 Ver archivos en Drive
+        </a>
+      ` : ""}
+    `;
+  } catch (e) {
+    document.getElementById("modal-detalle-body").innerHTML =
+      `<div style="color:var(--red);padding:12px">Error: ${e.message}</div>`;
+  }
+}
+
+// ════════════════════════════════════════════════
+// FILTROS Y BÚSQUEDA
+// ════════════════════════════════════════════════
+function setFiltro(estado, btn) {
+  _filtroEstado = estado;
+  document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  cargarSolicitudes();
+}
+
+function buscarDebounce() {
+  clearTimeout(_buscarTimer);
+  _buscarTimer = setTimeout(() => cargarSolicitudes(), 400);
+}
+
+// ════════════════════════════════════════════════
+// MODAL HELPERS
+// ════════════════════════════════════════════════
+function cerrarModal(id) {
+  document.getElementById(id).classList.remove("open");
+}
+
+// Cerrar al clic fuera
+document.querySelectorAll(".modal-overlay").forEach(overlay => {
+  overlay.addEventListener("click", function(e) {
+    if (e.target === this) this.classList.remove("open");
+  });
+});
+
+// Cerrar con ESC
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    document.querySelectorAll(".modal-overlay.open")
+      .forEach(m => m.classList.remove("open"));
+  }
+});
+
+// ════════════════════════════════════════════════
+// BADGES SIDEBAR + MOBILE
+// ════════════════════════════════════════════════
+async function actualizarBadges() {
+  try {
+    const data = await api("getDashboard");
+    const total = (data.opPendientesImprimir || 0) + (data.opPendientesEntregar || 0);
+    const badgeEl = document.getElementById("nav-badge-copias");
+    if (badgeEl) { badgeEl.textContent = total; badgeEl.style.display = total > 0 ? "" : "none"; }
+    const mnBadge = document.getElementById("mn-badge-copias");
+    if (mnBadge) { mnBadge.textContent = total; mnBadge.style.display = total > 0 ? "" : "none"; }
+  } catch (_) {}
+}
+
+// ════════════════════════════════════════════════
+// TOAST SYSTEM
+// ════════════════════════════════════════════════
+function toast(msg, type = "info", duration = 4000) {
+  const container = document.getElementById("toast-container");
+  const icons = { success: "✅", error: "❌", info: "ℹ️" };
+
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type] || "ℹ️"}</span><span>${msg}</span>`;
+  container.appendChild(el);
+
+  setTimeout(() => {
+    el.style.animation = "slideOut .3s ease forwards";
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+}
+
+// ════════════════════════════════════════════════
+// INICIO
+// ════════════════════════════════════════════════
+window.addEventListener("load", () => {
+  actualizarMesLabel();
+  cargarDashboard();
+});
+</script>
+</body>
+</html>
