@@ -1917,6 +1917,7 @@ async function cargarSolicitudes() {
     const buscar = document.getElementById('inp-buscar')?.value?.trim() || '';
     let q = _sb.from('bib_solicitudes')
       .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,profesor,materia,bib_documentos(id,nombre_archivo,num_hojas,tipo_impresion,forma_impresion)')
+      .in('tipo_remitente', ['institucional', 'general'])
       .gte('fecha_recepcion', p1).lt('fecha_recepcion', p2)
       .order('fecha_recepcion', { ascending: false });
     if (_filtro === 'cancelado')      q = q.eq('estado', 'cancelado');
