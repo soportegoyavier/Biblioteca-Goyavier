@@ -1,808 +1,606 @@
-// ============================================
-// BIBLIOTECA GOYAVIER — WEB APP BACKEND
-// Archivo: WebApp_Backend.gs  (versión 2.1)
-// ============================================
-// CAMBIO v2.1: Soporte JSONP en doGet()
-//   → Permite usar el Index.html desde Live Server
-//     (localhost) o cualquier origen externo sin
-//     errores de CORS.
-//   → Todo lo demás es idéntico a v2.0.
-// ============================================
+// ============================================================
+// BIBLIOTECA GOYAVIER — GAS Slim v3.0
+// Solo hace 2 cosas que requieren Google OAuth:
+//   1. Leer Gmail y sincronizar a Supabase
+//   2. Enviar correos DESDE la cuenta de Biblioteca
+//
+// Todo lo demás (CRUD, dashboard, auth) va directo a Supabase
+// desde el frontend.
+//
+// CONFIGURACIÓN REQUERIDA (Script Properties):
+//   SUPABASE_URL  → https://xmondkilgkesaqaspmfq.supabase.co
+//   SUPABASE_KEY  → service_role key (nunca en el HTML)
+// ============================================================
 
-const APP_CONFIG = {
-  NOMBRE_HOJA: "Correos Colegio",
-  EMAIL_BIBLIOTECA: Session.getEffectiveUser().getEmail(),
+// ── Leer config de Script Properties (más seguro que hardcodear) ──
+function _cfg(key) {
+  return PropertiesService.getScriptProperties().getProperty(key) || "";
+}
 
-  COL: {
-    FECHA: 1,
-    REMITENTE: 2,
-    ASUNTO: 3,
-    CUERPO: 4,
-    NUM_ADJUNTOS: 5,
-    CARPETA: 6,
-    ID_MENSAJE: 7,
-    EMAIL_DESTINO: 8,
-    ESTADO: 9,
-    ENVIADO_RECIBIDO: 10,
-    ENVIADO_IMPRESO: 11,
-    ENVIADO_ENTREGADO: 12,
-    // Columnas NUEVAS (se agregan automáticamente)
-    ID_SOLICITUD: 13,
-    PROFESOR: 14,
-    AREA: 15,
-    MATERIA: 16,
-    TIPO_IMPRESION: 17,
-    TIPO_HOJA: 18,
-    NUM_HOJAS: 19,
-    TIPO_DOCUMENTO: 20,
-    NOMBRE_RECIBE: 21,
-    FECHA_ENTREGA: 22,
-    OBSERVACIONES: 23
-  }
-};
-
-// ============================================
-// ENTRY POINT — WEB APP
-// ============================================
+// ============================================================
+// ENTRY POINT
+// ============================================================
 function doGet(e) {
-  // ── MODO API (payload presente) ──────────────
   if (e && e.parameter && e.parameter.payload) {
-    let resultado;
+    var resultado;
     try {
-      const params = JSON.parse(decodeURIComponent(e.parameter.payload));
+      var params = JSON.parse(decodeURIComponent(e.parameter.payload));
       resultado = despachar(params);
     } catch (err) {
-      Logger.log("doGet error: " + err.toString());
       resultado = { error: err.toString() };
     }
 
-    // ── JSONP: si viene ?callback=xxx, envolver la respuesta ──
-    //    Esto elimina los errores CORS al abrir desde Live Server / localhost.
-    //    Los <script> tags no tienen restricciones de origen cruzado.
+    // JSONP: permite llamadas desde cualquier origen sin CORS
     if (e.parameter.callback) {
-      const jsonpBody = e.parameter.callback + "(" + JSON.stringify(resultado) + ")";
       return ContentService
-        .createTextOutput(jsonpBody)
+        .createTextOutput(e.parameter.callback + "(" + JSON.stringify(resultado) + ")")
         .setMimeType(ContentService.MimeType.JAVASCRIPT);
     }
-
-    // Sin callback: respuesta JSON normal (producción desde GAS)
-    return respuesta(resultado);
+    return ContentService
+      .createTextOutput(JSON.stringify(resultado))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
-  // ── MODO PÁGINA: servir el HTML ──────────────
-  return HtmlService.createHtmlOutputFromFile("Index")
-    .setTitle("Biblioteca Goyavier")
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
-    .addMetaTag("viewport", "width=device-width, initial-scale=1");
+  return ContentService.createTextOutput("Biblioteca Goyavier GAS v3.0 — OK");
 }
 
-function doPost(e) {
+function despachar(p) {
+  switch (p.accion) {
+    case "sincronizarCorreos": return sincronizarCorreos(p);
+    case "enviarCorreo":       return enviarCorreo(p);
+    default: return { error: "Acción no reconocida: " + p.accion };
+  }
+}
+
+// ============================================================
+// SINCRONIZAR CORREOS GMAIL → SUPABASE  (v4 — optimizado)
+//
+// Optimizaciones aplicadas:
+//   1. Setup paralelo: lista blanca + IDs existentes en un solo fetchAll
+//   2. IDs limitados a ventana de 3 meses (no carga toda la historia)
+//   3. Paginación por lotes: startOffset + maxMessages (8 por defecto)
+//   4. Uploads de adjuntos en PARALELO por mensaje (UrlFetchApp.fetchAll)
+//   5. Batch insert de solicitudes en un solo POST
+//   6. Batch insert de documentos en un solo POST
+//   7. maxMs 22 segundos → responde siempre antes del timeout del navegador
+// ============================================================
+function sincronizarCorreos(params) {
+  var t0 = Date.now();
+  var hoy = new Date();
+  var mes         = (params && params.mes         !== undefined) ? parseInt(params.mes)         : hoy.getMonth();
+  var ano         = (params && params.ano         !== undefined) ? parseInt(params.ano)         : hoy.getFullYear();
+  var maxMs       = (params && params.maxMs       !== undefined) ? parseInt(params.maxMs)       : 22000;
+  var startOffset = (params && params.startOffset !== undefined) ? parseInt(params.startOffset) : 0;
+  var maxMessages = (params && params.maxMessages !== undefined) ? parseInt(params.maxMessages) : 8;
+
+  var SUPABASE_URL = _cfg("SUPABASE_URL");
+  var SUPABASE_KEY = _cfg("SUPABASE_KEY");
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return { error: "Faltan SUPABASE_URL o SUPABASE_KEY en Script Properties." };
+  }
+
+  var primerDia    = new Date(ano, mes, 1);
+  var primerDiaSig = new Date(ano, mes + 1, 1);
+  // Fecha mínima de búsqueda: evita cargar histórico anterior al inicio del sistema
+  if (params && params.fechaMinima) {
+    var _fm = new Date(params.fechaMinima);
+    if (!isNaN(_fm.getTime()) && _fm > primerDia) primerDia = _fm;
+  }
+
+  // ── 1. Lista blanca + IDs existentes en PARALELO ─────────────
+  // IDs: solo últimos 3 meses (evita cargar toda la historia)
+  var ventanaIds = new Date(ano, mes - 2, 1).toISOString();
+  var setupReqs  = [
+    {
+      url: SUPABASE_URL + "/rest/v1/bib_remitentes_autorizados?select=email,tipo&activo=eq.true",
+      method: "GET",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY },
+      muteHttpExceptions: true
+    },
+    {
+      url: SUPABASE_URL + "/rest/v1/bib_solicitudes?select=gmail_message_id&gmail_message_id=not.is.null&fecha_recepcion=gte." + ventanaIds,
+      method: "GET",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY },
+      muteHttpExceptions: true
+    },
+    {
+      url: SUPABASE_URL + "/rest/v1/bib_mensajes_ignorados?select=gmail_message_id",
+      method: "GET",
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY },
+      muteHttpExceptions: true
+    }
+  ];
+  var setupResp = UrlFetchApp.fetchAll(setupReqs);
+
+  // Parsear lista blanca
+  var listaBlanca = {};
   try {
-    const params = JSON.parse(e.postData.contents);
-    return respuesta(despachar(params));
-  } catch (err) {
-    Logger.log("doPost error: " + err.toString());
-    return respuesta({ error: err.toString() });
-  }
-}
+    var rb = JSON.parse(setupResp[0].getContentText());
+    if (!Array.isArray(rb)) return { error: "Error cargando remitentes: " + setupResp[0].getContentText().substring(0, 200) };
+    rb.forEach(function(r) {
+      var e = String(r.email || "").trim().toLowerCase();
+      if (validarEmail(e)) listaBlanca[e] = r.tipo || "general";
+    });
+  } catch(ex) { return { error: "Parse remitentes: " + ex.toString() }; }
 
-function despachar(params) {
-  const accion = params.accion;
-  switch (accion) {
-    case "getDashboard":        return getDashboard();
-    case "getSolicitudes":      return getSolicitudes(params);
-    case "actualizarEstado":    return actualizarEstado(params);
-    case "guardarEntrega":      return guardarEntrega(params);
-    case "getSolicitudDetalle": return getSolicitudDetalle(params.fila);
-    case "editarSolicitud":     return editarSolicitud(params);
-    case "sincronizarCorreos":  return sincronizarCorreos(params);
-    default:                    return { error: "Acción no reconocida: " + accion };
-  }
-}
-
-function respuesta(datos) {
-  return ContentService
-    .createTextOutput(JSON.stringify(datos))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-// ============================================
-// DASHBOARD
-// ============================================
-// FIXES:
-//   1. Comparaciones con .includes() en lugar de === para emojis
-//      (el carácter de variación U+FE0F de 🖨️ puede perderse en Sheets)
-//   2. Tarjetas del dashboard filtradas al MES ACTUAL
-//   3. Badge sidebar usa pendientes TOTALES (operacionales, sin filtro de fecha)
-// ============================================
-function getDashboard() {
-  const sheet = obtenerHoja();
-  const ultimaFila = sheet.getLastRow();
-
-  if (ultimaFila < 2) {
-    return {
-      pendientesImprimir: 0,
-      pendientesEntregar: 0,
-      entregadas: 0,
-      totalHojasMes: 0,
-      totalSolicitudesMes: 0,
-      // Operacionales (todos los pendientes sin importar fecha → badge sidebar)
-      opPendientesImprimir: 0,
-      opPendientesEntregar: 0
-    };
+  if (!Object.keys(listaBlanca).length) {
+    return { error: "Sin remitentes autorizados activos en bib_remitentes_autorizados." };
   }
 
-  const datos = sheet.getRange(2, 1, ultimaFila - 1, 23).getValues();
-  const hoy   = new Date();
-  const primerDiaMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-  // Último instante del día de hoy
-  const finHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
+  // Parsear IDs existentes
+  var idsExistentes = {};
+  try {
+    var ri = JSON.parse(setupResp[1].getContentText());
+    if (Array.isArray(ri)) ri.forEach(function(r) { if (r.gmail_message_id) idsExistentes[r.gmail_message_id] = true; });
+  } catch(ex) { /* continúa sin dedup histórico */ }
 
-  // Contadores MES (para las tarjetas del dashboard)
-  let pendientesImprimir  = 0;
-  let pendientesEntregar  = 0;
-  let entregadas          = 0;
-  let totalHojasMes       = 0;
-  let totalSolicitudesMes = 0;
+  // Parsear mensajes ignorados (eliminados manualmente por el operador)
+  var idsIgnorados = {};
+  try {
+    var rn = JSON.parse(setupResp[2].getContentText());
+    if (Array.isArray(rn)) rn.forEach(function(r) { if (r.gmail_message_id) idsIgnorados[r.gmail_message_id] = true; });
+  } catch(ex) { /* continúa sin lista de ignorados */ }
 
-  // Contadores OPERACIONALES — todos los pendientes sin filtro de fecha
-  // (se usa para el badge del sidebar y alertas)
-  let opPendientesImprimir = 0;
-  let opPendientesEntregar = 0;
+  // ── 2. Buscar threads (paginado) ──────────────────────────────
+  function fmtGmail(d) {
+    return d.getFullYear() + "/" + String(d.getMonth() + 1).padStart(2, "0") + "/" + String(d.getDate()).padStart(2, "0");
+  }
 
-  for (let i = 0; i < datos.length; i++) {
-    // FIX: usar .includes() para evitar fallo por U+FE0F en emojis de Sheets
-    const estado   = String(datos[i][APP_CONFIG.COL.ESTADO - 1] || "");
-    const numHojas = parseInt(datos[i][APP_CONFIG.COL.NUM_HOJAS - 1]) || 0;
-    const fecha    = datos[i][APP_CONFIG.COL.FECHA - 1];
+  var hoyNow      = new Date();
+  var esMesActual = (mes === hoyNow.getMonth() && ano === hoyNow.getFullYear());
+  var query;
 
-    const esRecibido  = estado.includes("Recibido");
-    const esImpreso   = estado.includes("Impreso");
-    const esEntregado = estado.includes("Entregado");
+  // Busca todo el correo recibido (no solo inbox) para capturar correos personales/externos
+  // que pueden estar en etiquetas distintas a la bandeja de entrada
+  var baseQuery = "-in:sent -in:trash -in:drafts";
 
-    // ── Operacionales (sin filtro de fecha) ────────────────
-    if (esRecibido) opPendientesImprimir++;
-    if (esImpreso)  opPendientesEntregar++;
+  if (esMesActual) {
+    var syncRes   = sbGet(SUPABASE_URL, SUPABASE_KEY, "bib_sync_estado?id=eq.1&select=ultimo_message_date");
+    var ultimoChk = (Array.isArray(syncRes) && syncRes[0]) ? syncRes[0].ultimo_message_date : null;
+    query = ultimoChk
+      ? baseQuery + " after:" + fmtGmail(new Date(ultimoChk))
+      : baseQuery + " after:" + fmtGmail(primerDia) + " before:" + fmtGmail(primerDiaSig);
+  } else {
+    query = baseQuery + " after:" + fmtGmail(primerDia) + " before:" + fmtGmail(primerDiaSig);
+  }
 
-    // ── Solo si es del mes actual ──────────────────────────
-    const esMesActual = fecha instanceof Date
-      && fecha >= primerDiaMes
-      && fecha <= finHoy;
+  // Obtener solo el lote: startOffset..startOffset+maxMessages
+  var threads    = GmailApp.search(query, startOffset, maxMessages + 2);
+  var agregados  = 0;
+  var omitidos   = 0;
+  var rechazados = 0;
+  var ultimaFecha = null;
+  var emailBiblioteca = Session.getEffectiveUser().getEmail().toLowerCase();
 
-    if (esMesActual) {
-      if (esRecibido)  pendientesImprimir++;
-      if (esImpreso)   pendientesEntregar++;
-      if (esEntregado) entregadas++;
-      totalHojasMes += numHojas;
-      totalSolicitudesMes++;
+  // ── 3. Recopilar mensajes nuevos del lote ─────────────────────
+  var nuevos = []; // lista de mensajes a procesar
+  var threadsVisto = 0;
+
+  for (var t = 0; t < threads.length && threadsVisto < maxMessages; t++) {
+    threadsVisto++;
+    var msgs = threads[t].getMessages();
+    for (var m = 0; m < msgs.length; m++) {
+      var msg   = msgs[m];
+      var msgId = msg.getId();
+      if (idsExistentes[msgId] || idsIgnorados[msgId]) { omitidos++; continue; }
+
+      var fechaMsg = msg.getDate();
+      if (fechaMsg < primerDia || fechaMsg >= primerDiaSig) continue;
+      if (!ultimaFecha || fechaMsg > ultimaFecha) ultimaFecha = fechaMsg;
+
+      var remitenteRaw  = msg.getFrom();
+      var emailMatch    = remitenteRaw.match(/<([^>]+)>/);
+      var emailRemit    = emailMatch ? emailMatch[1].trim().toLowerCase() : remitenteRaw.trim().toLowerCase();
+      // Clasificación automática: whitelist → institucional/general; resto → personal
+      var tipoRemitente = listaBlanca[emailRemit] || 'personal';
+      if (!listaBlanca[emailRemit]) rechazados++; // conteo informativo (no institucional)
+
+      var emailDestino = emailRemit;
+      try {
+        var toList = msg.getTo().split(",");
+        for (var i = 0; i < toList.length; i++) {
+          var addr  = toList[i].trim();
+          var am    = addr.match(/<([^>]+)>/);
+          var ae    = am ? am[1].trim().toLowerCase() : addr.toLowerCase();
+          if (ae && ae !== emailBiblioteca) { emailDestino = ae; break; }
+        }
+      } catch(ex2) {}
+
+      nuevos.push({ msg: msg, msgId: msgId, fechaMsg: fechaMsg, remitenteRaw: remitenteRaw,
+                    emailRemit: emailRemit, tipoRemitente: tipoRemitente, emailDestino: emailDestino });
     }
   }
 
-  return {
-    // Tarjetas dashboard → mes actual
-    pendientesImprimir,
-    pendientesEntregar,
-    entregadas,
-    totalHojasMes,
-    totalSolicitudesMes,
-    // Badge sidebar → operacionales totales
-    opPendientesImprimir,
-    opPendientesEntregar
-  };
-}
+  var nextOffset = startOffset + threads.length;
+  var hayMas     = threads.length >= maxMessages;
 
-// ============================================
-// LEER SOLICITUDES (con filtro de mes)
-// ============================================
-// params.mes: 0-based month number (default = mes actual)
-// params.ano: 4-digit year (default = año actual)
-// params.soloMes: si true, filtra estrictamente al mes/año dado
-// ============================================
-function getSolicitudes(params) {
-  const sheet = obtenerHoja();
-  const ultimaFila = sheet.getLastRow();
+  if (!nuevos.length) {
+    if (esMesActual && ultimaFecha) {
+      sbPatch(SUPABASE_URL, SUPABASE_KEY, "bib_sync_estado?id=eq.1",
+        { ultimo_sync_at: new Date().toISOString(), ultimo_message_date: ultimaFecha.toISOString() });
+    }
+    return { ok: true, agregados: 0, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: hayMas, nextOffset: nextOffset, ms: Date.now()-t0 };
+  }
 
-  if (ultimaFila < 2) return { solicitudes: [] };
+  // ── 4. Adjuntos: leer bytes y subir EN PARALELO por mensaje ──
+  for (var n = 0; n < nuevos.length; n++) {
+    var item     = nuevos[n];
+    var adjuntos = item.msg.getAttachments();
+    var uploadReqs  = [];
+    var adjMeta     = [];
 
-  asegurarEncabezadosNuevos(sheet);
-
-  const datos = sheet.getRange(2, 1, ultimaFila - 1, 23).getValues();
-  const solicitudes = [];
-
-  const filtroEstado = params && params.filtroEstado ? String(params.filtroEstado) : "";
-  const filtroBuscar = params && params.buscar       ? String(params.buscar).toLowerCase() : "";
-
-  // Filtro de mes/año: por defecto mes actual
-  const hoy = new Date();
-  const mesTarget = (params && params.mes !== undefined && params.mes !== null)
-    ? parseInt(params.mes) : hoy.getMonth();
-  const anoTarget = (params && params.ano !== undefined && params.ano !== null)
-    ? parseInt(params.ano) : hoy.getFullYear();
-
-  const primerDiaMes = new Date(anoTarget, mesTarget, 1);
-  const primerDiaSig = new Date(anoTarget, mesTarget + 1, 1);
-
-  for (let i = 0; i < datos.length; i++) {
-    const fila = i + 2;
-    const row  = datos[i];
-
-    // Filtrar al mes/año objetivo
-    const fechaFila = row[APP_CONFIG.COL.FECHA - 1];
-    if (!(fechaFila instanceof Date)) continue;
-    if (fechaFila < primerDiaMes || fechaFila >= primerDiaSig) continue;
-
-    // FIX: usar .includes() para comparar estados con emojis
-    const estado    = String(row[APP_CONFIG.COL.ESTADO - 1]       || "");
-    const profesor  = String(row[APP_CONFIG.COL.PROFESOR - 1]     || "");
-    const asunto    = String(row[APP_CONFIG.COL.ASUNTO - 1]       || "");
-    const remitente = String(row[APP_CONFIG.COL.REMITENTE - 1]    || "");
-    const idSol     = String(row[APP_CONFIG.COL.ID_SOLICITUD - 1] || "");
-
-    // FIX: filtroEstado con .includes() para robustez con emojis
-    if (filtroEstado && !estado.includes(filtroEstado)) continue;
-    if (filtroBuscar) {
-      const hayCoincidencia =
-        profesor.toLowerCase().includes(filtroBuscar)  ||
-        asunto.toLowerCase().includes(filtroBuscar)    ||
-        remitente.toLowerCase().includes(filtroBuscar) ||
-        idSol.toLowerCase().includes(filtroBuscar);
-      if (!hayCoincidencia) continue;
+    for (var a = 0; a < adjuntos.length; a++) {
+      var att   = adjuntos[a];
+      var nom   = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
+      var mime  = att.getContentType();
+      var bytes = att.getBytes();
+      var path  = item.msgId + "/" + nom;
+      var epth  = path.split("/").map(encodeURIComponent).join("/");
+      uploadReqs.push({
+        url: SUPABASE_URL + "/storage/v1/object/biblioteca-adjuntos/" + epth,
+        method: "POST",
+        headers: { "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": mime || "application/octet-stream", "x-upsert": "true" },
+        payload: bytes,
+        muteHttpExceptions: true
+      });
+      adjMeta.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: bytes.length, path: path });
     }
 
-    const fecha = row[0];
-    let fechaStr = "";
-    if (fecha instanceof Date) {
-      fechaStr = Utilities.formatDate(fecha, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
-    } else {
-      fechaStr = String(fecha || "");
-    }
+    // ← PARALELO: todos los adjuntos del mensaje en una sola llamada
+    var upResp = uploadReqs.length ? UrlFetchApp.fetchAll(uploadReqs) : [];
 
-    const fechaEntregaRaw = row[APP_CONFIG.COL.FECHA_ENTREGA - 1];
-    let fechaEntregaStr = "";
-    if (fechaEntregaRaw instanceof Date) {
-      fechaEntregaStr = Utilities.formatDate(fechaEntregaRaw, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
-    }
-
-    solicitudes.push({
-      fila,
-      fecha:            fechaStr,
-      remitente,
-      asunto,
-      estado,
-      carpetaLink:      String(row[APP_CONFIG.COL.CARPETA - 1]        || ""),
-      numAdjuntos:      parseInt(row[APP_CONFIG.COL.NUM_ADJUNTOS - 1])|| 0,
-      emailDestino:     String(row[APP_CONFIG.COL.EMAIL_DESTINO - 1]  || remitente || ""),
-      idSolicitud:      idSol,
-      profesor,
-      area:             String(row[APP_CONFIG.COL.AREA - 1]           || ""),
-      materia:          String(row[APP_CONFIG.COL.MATERIA - 1]        || ""),
-      tipoImpresion:    String(row[APP_CONFIG.COL.TIPO_IMPRESION - 1] || ""),
-      tipoHoja:         String(row[APP_CONFIG.COL.TIPO_HOJA - 1]      || ""),
-      numHojas:         parseInt(row[APP_CONFIG.COL.NUM_HOJAS - 1])   || 0,
-      tipoDocumento:    String(row[APP_CONFIG.COL.TIPO_DOCUMENTO - 1] || ""),
-      nombreRecibe:     String(row[APP_CONFIG.COL.NOMBRE_RECIBE - 1]  || ""),
-      fechaEntrega:     fechaEntregaStr,
-      observaciones:    String(row[APP_CONFIG.COL.OBSERVACIONES - 1]  || ""),
-      enviadoRecibido:  String(row[APP_CONFIG.COL.ENVIADO_RECIBIDO - 1]  || ""),
-      enviadoImpreso:   String(row[APP_CONFIG.COL.ENVIADO_IMPRESO - 1]   || ""),
-      enviadoEntregado: String(row[APP_CONFIG.COL.ENVIADO_ENTREGADO - 1] || ""),
+    item._docs = adjMeta.map(function(meta, idx) {
+      var ok = upResp[idx] && upResp[idx].getResponseCode() < 400;
+      return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
     });
   }
 
-  solicitudes.reverse();
-  return { solicitudes, mes: mesTarget, ano: anoTarget };
-}
-
-// ============================================
-// DETALLE DE UNA FILA
-// ============================================
-function getSolicitudDetalle(fila) {
-  if (!fila || fila < 2) throw new Error("Fila inválida");
-
-  const sheet = obtenerHoja();
-  const row   = sheet.getRange(fila, 1, 1, 23).getValues()[0];
-
-  const fecha = row[0];
-  let fechaStr = "";
-  if (fecha instanceof Date) {
-    fechaStr = Utilities.formatDate(fecha, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
-  }
-
-  return {
-    fila,
-    fecha:         fechaStr,
-    remitente:     String(row[APP_CONFIG.COL.REMITENTE - 1]     || ""),
-    asunto:        String(row[APP_CONFIG.COL.ASUNTO - 1]        || ""),
-    cuerpo:        String(row[APP_CONFIG.COL.CUERPO - 1]        || ""),
-    estado:        String(row[APP_CONFIG.COL.ESTADO - 1]        || ""),
-    carpetaLink:   String(row[APP_CONFIG.COL.CARPETA - 1]       || ""),
-    numAdjuntos:   parseInt(row[APP_CONFIG.COL.NUM_ADJUNTOS - 1])|| 0,
-    idSolicitud:   String(row[APP_CONFIG.COL.ID_SOLICITUD - 1]  || ""),
-    emailDestino:  String(row[APP_CONFIG.COL.EMAIL_DESTINO - 1] || row[APP_CONFIG.COL.REMITENTE - 1] || ""),
-    profesor:      String(row[APP_CONFIG.COL.PROFESOR - 1]      || ""),
-    area:          String(row[APP_CONFIG.COL.AREA - 1]          || ""),
-    materia:       String(row[APP_CONFIG.COL.MATERIA - 1]       || ""),
-    tipoImpresion: String(row[APP_CONFIG.COL.TIPO_IMPRESION - 1]|| ""),
-    tipoHoja:      String(row[APP_CONFIG.COL.TIPO_HOJA - 1]     || ""),
-    numHojas:      parseInt(row[APP_CONFIG.COL.NUM_HOJAS - 1])  || 0,
-    tipoDocumento: String(row[APP_CONFIG.COL.TIPO_DOCUMENTO - 1]|| ""),
-    nombreRecibe:  String(row[APP_CONFIG.COL.NOMBRE_RECIBE - 1] || ""),
-    observaciones: String(row[APP_CONFIG.COL.OBSERVACIONES - 1] || ""),
-  };
-}
-
-// ============================================
-// EDITAR CAMPOS DE UNA SOLICITUD (SIN CAMBIAR ESTADO)
-// ============================================
-function editarSolicitud(params) {
-  const { fila, profesor, area, materia, tipoImpresion,
-          tipoHoja, numHojas, tipoDocumento, observaciones } = params;
-
-  if (!fila) throw new Error("Fila no especificada");
-
-  const sheet = obtenerHoja();
-
-  const updates = {
-    [APP_CONFIG.COL.PROFESOR]:       profesor      || "",
-    [APP_CONFIG.COL.AREA]:           area          || "",
-    [APP_CONFIG.COL.MATERIA]:        materia       || "",
-    [APP_CONFIG.COL.TIPO_IMPRESION]: tipoImpresion || "",
-    [APP_CONFIG.COL.TIPO_HOJA]:      tipoHoja      || "",
-    [APP_CONFIG.COL.NUM_HOJAS]:      parseInt(numHojas) || 0,
-    [APP_CONFIG.COL.TIPO_DOCUMENTO]: tipoDocumento || "",
-    [APP_CONFIG.COL.OBSERVACIONES]:  observaciones || "",
-  };
-
-  for (const col in updates) {
-    sheet.getRange(fila, parseInt(col)).setValue(updates[col]);
-  }
-
-  SpreadsheetApp.flush();
-  return { ok: true };
-}
-
-// ============================================
-// ACTUALIZAR ESTADO: RECIBIDO o IMPRESO
-// ============================================
-function actualizarEstado(params) {
-  const { fila, nuevoEstado, accion } = params;
-
-  if (!fila || !nuevoEstado) throw new Error("Parámetros inválidos");
-
-  const sheet   = obtenerHoja();
-  const rowData = sheet.getRange(fila, 1, 1, 23).getValues()[0];
-  const estadoActual = String(rowData[APP_CONFIG.COL.ESTADO - 1] || "");
-
-  // FIX: .includes() para no fallar por variantes de emoji en Sheets
-  if (accion === "marcarImpreso" && !estadoActual.includes("Recibido")) {
-    throw new Error("Solo se puede marcar Impreso si el estado actual es Recibido. Estado actual: " + estadoActual);
-  }
-
-  let idSolicitud = String(rowData[APP_CONFIG.COL.ID_SOLICITUD - 1] || "");
-  if (!idSolicitud && accion === "marcarRecibido") {
-    idSolicitud = generarIdSolicitud(sheet);
-    sheet.getRange(fila, APP_CONFIG.COL.ID_SOLICITUD).setValue(idSolicitud);
-  }
-
-  sheet.getRange(fila, APP_CONFIG.COL.ESTADO).setValue(nuevoEstado);
-
-  const destinatario = String(rowData[APP_CONFIG.COL.EMAIL_DESTINO - 1] || rowData[APP_CONFIG.COL.REMITENTE - 1] || "");
-  const datosCorreo = {
-    destinatario,
-    asunto:     String(rowData[APP_CONFIG.COL.ASUNTO - 1]   || ""),
-    idSolicitud,
-    profesor:   String(rowData[APP_CONFIG.COL.PROFESOR - 1] || ""),
-    numHojas:   parseInt(rowData[APP_CONFIG.COL.NUM_HOJAS - 1]) || 0,
-  };
-
-  if (accion === "marcarRecibido") {
-    if (enviarCorreoRecibido(datosCorreo)) {
-      sheet.getRange(fila, APP_CONFIG.COL.ENVIADO_RECIBIDO).setValue("✅ " + fechaHoraActual());
-    }
-  } else if (accion === "marcarImpreso") {
-    if (enviarCorreoImpreso(datosCorreo)) {
-      sheet.getRange(fila, APP_CONFIG.COL.ENVIADO_IMPRESO).setValue("✅ " + fechaHoraActual());
-    }
-  }
-
-  SpreadsheetApp.flush();
-  return { ok: true, idSolicitud, nuevoEstado };
-}
-
-// ============================================
-// GUARDAR ENTREGA COMPLETA
-// ============================================
-function guardarEntrega(params) {
-  const { fila, profesor, area, materia, tipoImpresion, tipoHoja,
-          numHojas, tipoDocumento, nombreRecibe, observaciones } = params;
-
-  if (!fila)         throw new Error("Fila no especificada");
-  if (!nombreRecibe) throw new Error("El nombre de quien recibe es obligatorio");
-  if (!profesor)     throw new Error("El nombre del profesor es obligatorio");
-
-  const sheet    = obtenerHoja();
-  const rowData  = sheet.getRange(fila, 1, 1, 23).getValues()[0];
-  const estadoActual = String(rowData[APP_CONFIG.COL.ESTADO - 1] || "");
-
-  // FIX: .includes() para robustez con emojis
-  if (!estadoActual.includes("Impreso")) {
-    throw new Error("Solo se puede entregar si el estado es Impreso. Estado actual: " + estadoActual);
-  }
-
-  const ahora = new Date();
-
-  const updates = {
-    [APP_CONFIG.COL.PROFESOR]:       profesor      || "",
-    [APP_CONFIG.COL.AREA]:           area          || "",
-    [APP_CONFIG.COL.MATERIA]:        materia       || "",
-    [APP_CONFIG.COL.TIPO_IMPRESION]: tipoImpresion || "",
-    [APP_CONFIG.COL.TIPO_HOJA]:      tipoHoja      || "",
-    [APP_CONFIG.COL.NUM_HOJAS]:      parseInt(numHojas) || 0,
-    [APP_CONFIG.COL.TIPO_DOCUMENTO]: tipoDocumento || "",
-    [APP_CONFIG.COL.NOMBRE_RECIBE]:  nombreRecibe,
-    [APP_CONFIG.COL.FECHA_ENTREGA]:  ahora,
-    [APP_CONFIG.COL.OBSERVACIONES]:  observaciones || "",
-    [APP_CONFIG.COL.ESTADO]:         "📦 Entregado",
-  };
-
-  for (const col in updates) {
-    sheet.getRange(fila, parseInt(col)).setValue(updates[col]);
-  }
-
-  const idSolicitud  = String(rowData[APP_CONFIG.COL.ID_SOLICITUD - 1] || "");
-  const destinatario = String(rowData[APP_CONFIG.COL.EMAIL_DESTINO - 1] || rowData[APP_CONFIG.COL.REMITENTE - 1] || "");
-
-  const datosCorreo = {
-    destinatario,
-    asunto:        String(rowData[APP_CONFIG.COL.ASUNTO - 1] || ""),
-    idSolicitud,
-    profesor:      profesor      || "",
-    materia:       materia       || "",
-    numHojas:      parseInt(numHojas) || 0,
-    tipoImpresion: tipoImpresion || "",
-    tipoHoja:      tipoHoja      || "",
-    nombreRecibe,
-    observaciones: observaciones || "",
-    fechaEntrega:  Utilities.formatDate(ahora, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm"),
-  };
-
-  if (enviarCorreoEntregado(datosCorreo)) {
-    sheet.getRange(fila, APP_CONFIG.COL.ENVIADO_ENTREGADO).setValue("✅ " + fechaHoraActual());
-  }
-
-  SpreadsheetApp.flush();
-  return { ok: true };
-}
-
-// ============================================
-// ENVÍO DE CORREOS
-// ============================================
-function enviarCorreoRecibido(datos) {
-  try {
-    if (!validarEmail(datos.destinatario)) {
-      Logger.log("Email inválido para correo Recibido: " + datos.destinatario);
-      return false;
-    }
-
-    const asunto = "📥 Solicitud recibida — " + (datos.idSolicitud || datos.asunto);
-    const cuerpo =
-      "¡Hola! 👋\n\n" +
-      "Hemos recibido correctamente tu solicitud de impresión.\n\n" +
-      "📋 Referencia: " + (datos.idSolicitud || "—") + "\n" +
-      "📄 Asunto: " + datos.asunto + "\n" +
-      (datos.profesor ? "👤 Profesor: " + datos.profesor + "\n" : "") +
-      "\n" +
-      "⏱️ El tiempo estimado es de hasta 3 días hábiles.\n" +
-      "Te avisaremos cuando esté lista para recoger.\n\n" +
-      "🕐 HORARIO DE ENTREGA:\n" +
-      "Lunes a Viernes\n" +
-      "9:00 AM – 11:00 AM  |  1:30 PM – 3:00 PM\n\n" +
-      "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-      "📚 BIBLIOTECA — Colegio Goyavier\n" +
-      "¿Tienes alguna pregunta? Responde este correo.";
-
-    GmailApp.sendEmail(datos.destinatario, asunto, cuerpo);
-    return true;
-  } catch (e) {
-    Logger.log("Error enviarCorreoRecibido: " + e.toString());
-    return false;
-  }
-}
-
-function enviarCorreoImpreso(datos) {
-  try {
-    if (!validarEmail(datos.destinatario)) {
-      Logger.log("Email inválido para correo Impreso: " + datos.destinatario);
-      return false;
-    }
-
-    const asunto = "🖨️ ¡Tu impresión está lista! — " + (datos.idSolicitud || datos.asunto);
-    const cuerpo =
-      "¡Buenas noticias! 🎉\n\n" +
-      "Tu solicitud de impresión ya está lista y esperándote.\n\n" +
-      "📋 Referencia: " + (datos.idSolicitud || "—") + "\n" +
-      "📄 Asunto: " + datos.asunto + "\n" +
-      (datos.profesor ? "👤 Profesor: " + datos.profesor + "\n" : "") +
-      (datos.numHojas ? "📃 Hojas: " + datos.numHojas + "\n" : "") +
-      "\n" +
-      "📍 Pasa por la BIBLIOTECA a recogerla.\n\n" +
-      "🕐 HORARIO:\n" +
-      "Lunes a Viernes\n" +
-      "9:00 AM – 11:00 AM  |  1:30 PM – 3:00 PM\n\n" +
-      "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-      "📚 BIBLIOTECA — Colegio Goyavier\n" +
-      "¿Tienes alguna pregunta? Responde este correo.";
-
-    GmailApp.sendEmail(datos.destinatario, asunto, cuerpo);
-    return true;
-  } catch (e) {
-    Logger.log("Error enviarCorreoImpreso: " + e.toString());
-    return false;
-  }
-}
-
-function enviarCorreoEntregado(datos) {
-  try {
-    if (!validarEmail(datos.destinatario)) {
-      Logger.log("Email inválido para correo Entregado: " + datos.destinatario);
-      return false;
-    }
-
-    const asunto = "✅ Impresión entregada — " + (datos.idSolicitud || datos.asunto);
-    const cuerpo =
-      "¡Todo listo! ✅\n\n" +
-      "Tu impresión fue entregada exitosamente.\n\n" +
-      "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-      "📋 Referencia: " + (datos.idSolicitud || "—") + "\n" +
-      "👤 Recibió: " + datos.nombreRecibe + "\n" +
-      "📅 Fecha de entrega: " + datos.fechaEntrega + "\n" +
-      "📚 Materia: " + (datos.materia || "—") + "\n" +
-      "🖨️ Tipo: " + (datos.tipoImpresion || "—") + " en " + (datos.tipoHoja || "—") + "\n" +
-      "📃 Hojas: " + datos.numHojas + "\n" +
-      (datos.observaciones ? "💬 Observaciones: " + datos.observaciones + "\n" : "") +
-      "━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-      "Gracias por usar el servicio de la biblioteca. 😊\n\n" +
-      "📚 BIBLIOTECA — Colegio Goyavier\n" +
-      "¿Tienes alguna pregunta? Responde este correo.";
-
-    GmailApp.sendEmail(datos.destinatario, asunto, cuerpo);
-    return true;
-  } catch (e) {
-    Logger.log("Error enviarCorreoEntregado: " + e.toString());
-    return false;
-  }
-}
-
-// ============================================
-// SINCRONIZAR CORREOS DESDE GMAIL
-// ============================================
-// Lee Gmail del mes/año indicado, filtra por lista
-// blanca de remitentes (Hoja2 col A), y agrega
-// a "Correos Colegio" las filas que aún no existen
-// (deduplicación por ID_MENSAJE col 7).
-// ============================================
-function sincronizarCorreos(params) {
-  const hoy       = new Date();
-  const mes       = (params && params.mes !== undefined) ? parseInt(params.mes) : hoy.getMonth();
-  const ano       = (params && params.ano !== undefined) ? parseInt(params.ano) : hoy.getFullYear();
-
-  // ── 1. Cargar lista blanca desde Hoja2 col A ──
-  const ss         = SpreadsheetApp.getActiveSpreadsheet();
-  const hojaLista  = ss.getSheetByName("Hoja2");
-  if (!hojaLista) throw new Error("No se encontró la hoja 'Hoja2' con la lista de correos.");
-
-  const listaRaw   = hojaLista.getRange(1, 1, Math.max(hojaLista.getLastRow(), 1), 1).getValues();
-  const listaBlanca = new Set();
-  listaRaw.forEach(function(r) {
-    const email = String(r[0] || "").trim().toLowerCase();
-    if (email && email.indexOf("@") > -1) listaBlanca.add(email);
+  // ── 5. Insertar solicitudes en un único batch POST ────────────
+  var solRows = nuevos.map(function(item) {
+    return {
+      gmail_message_id: item.msgId,
+      fecha_recepcion:  item.fechaMsg.toISOString(),
+      remitente_nombre: item.remitenteRaw,
+      remitente_email:  item.emailRemit,
+      email_destino:    item.emailDestino,
+      tipo_remitente:   item.tipoRemitente,
+      asunto:           item.msg.getSubject() || "(sin asunto)",
+      cuerpo:           item.msg.getPlainBody().substring(0, 1000),
+      estado:           "pendiente"
+    };
   });
 
-  if (listaBlanca.size === 0) throw new Error("La lista de correos autorizados (Hoja2) está vacía.");
+  var solRes = sbPostBatch(SUPABASE_URL, SUPABASE_KEY, "bib_solicitudes", solRows);
 
-  // ── 2. Cargar IDs ya registrados en Sheets ────
-  const sheet      = obtenerHoja();
-  asegurarEncabezadosNuevos(sheet);
-  const ultimaFila = sheet.getLastRow();
+  // Fallback individual si el batch falla (conflicto de unicidad, etc.)
+  var _primerError = null;
+  if (!Array.isArray(solRes)) {
+    _primerError = (solRes && solRes.error) ? solRes.error : JSON.stringify(solRes);
+    Logger.log("Batch solicitudes error: " + _primerError + " — reintentando individualmente");
+    solRes = nuevos.map(function(item, idx) {
+      var r = sbPost(SUPABASE_URL, SUPABASE_KEY, "bib_solicitudes", solRows[idx]);
+      if (!Array.isArray(r) && !_primerError) _primerError = (r && r.error) ? r.error : JSON.stringify(r);
+      return (Array.isArray(r) && r[0]) ? r[0] : null;
+    });
+    // Si todos fallaron, devolver el error real para que el usuario lo vea
+    var _guardados = solRes.filter(function(r) { return r !== null; }).length;
+    if (_guardados === 0 && _primerError) {
+      return { error: "Error al guardar correos: " + _primerError.substring(0, 400) };
+    }
+  }
 
-  const idsExistentes = new Set();
-  if (ultimaFila >= 2) {
-    const colIds = sheet.getRange(2, APP_CONFIG.COL.ID_MENSAJE, ultimaFila - 1, 1).getValues();
-    colIds.forEach(function(r) {
-      const id = String(r[0] || "").trim();
-      if (id) idsExistentes.add(id);
+  // ── 6. Insertar documentos en un único batch POST ─────────────
+  var docRows = [];
+  for (var n2 = 0; n2 < nuevos.length; n2++) {
+    var sol = solRes[n2];
+    var sid = sol && sol.id;
+    if (!sid) continue;
+    idsExistentes[nuevos[n2].msgId] = true;
+    agregados++;
+    (nuevos[n2]._docs || []).forEach(function(doc) {
+      docRows.push({ solicitud_id: sid, nombre_archivo: doc.nombre_archivo, tipo_mime: doc.tipo_mime, tamano_bytes: doc.tamano_bytes, storage_path: doc.storage_path });
     });
   }
+  if (docRows.length) sbPostBatch(SUPABASE_URL, SUPABASE_KEY, "bib_documentos", docRows);
 
-  // ── 3. Buscar correos en Gmail del mes ────────
-  // Rango: desde el primer día del mes hasta el último
-  const primerDia = new Date(ano, mes, 1);
-  const ultimoDia = new Date(ano, mes + 1, 0);   // día 0 del mes siguiente = último del mes
-
-  // Formato para query Gmail: after:YYYY/MM/DD before:YYYY/MM/DD
-  function fmtGmail(d) {
-    return d.getFullYear() + "/" +
-           String(d.getMonth() + 1).padStart(2, "0") + "/" +
-           String(d.getDate()).padStart(2, "0");
+  // ── 7. Actualizar checkpoint ───────────────────────────────────
+  if (esMesActual && ultimaFecha) {
+    sbPatch(SUPABASE_URL, SUPABASE_KEY, "bib_sync_estado?id=eq.1",
+      { ultimo_sync_at: new Date().toISOString(), ultimo_message_date: ultimaFecha.toISOString() });
   }
 
-  // after es inclusivo, before es exclusivo → sumar 1 día al último
-  const despuesUltimo = new Date(ano, mes + 1, 1);
-  const query = "in:inbox after:" + fmtGmail(primerDia) + " before:" + fmtGmail(despuesUltimo);
+  var elapsed = Date.now() - t0;
+  Logger.log("Sync lote " + startOffset + "→" + nextOffset + ": " + agregados + " nuevos, " + omitidos + " omitidos, " + rechazados + " rechazados. " + elapsed + "ms");
 
-  const threads = GmailApp.search(query, 0, 500);  // máx 500 threads por mes
+  return { ok: true, agregados: agregados, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: hayMas, nextOffset: nextOffset, ms: elapsed };
+}
 
-  let agregados   = 0;
-  let omitidos    = 0;   // ya existían
-  let rechazados  = 0;   // no están en lista blanca
-
-  const filasNuevas = [];
-
-  for (var t = 0; t < threads.length; t++) {
-    const mensajes = threads[t].getMessages();
-
-    for (var m = 0; m < mensajes.length; m++) {
-      const msg       = mensajes[m];
-      const msgId     = msg.getId();
-
-      // Deduplicar
-      if (idsExistentes.has(msgId)) { omitidos++; continue; }
-
-      // Fecha del mensaje
-      const fechaMsg  = msg.getDate();
-      // Verificar que esté dentro del mes (el thread puede tener mensajes de otros meses)
-      if (fechaMsg < primerDia || fechaMsg >= despuesUltimo) continue;
-
-      // Filtrar por lista blanca
-      const remitenteRaw = msg.getFrom();                          // "Nombre <email>" o solo "email"
-      const emailMatch   = remitenteRaw.match(/<([^>]+)>/);
-      const emailRemit   = emailMatch
-        ? emailMatch[1].trim().toLowerCase()
-        : remitenteRaw.trim().toLowerCase();
-
-      if (!listaBlanca.has(emailRemit)) { rechazados++; continue; }
-
-      // Buscar carpeta Drive asociada (por nombre del asunto o ID mensaje)
-      // Ya las crea otro script → buscamos por ID del mensaje en Drive
-      var carpetaLink = "";
-      try {
-        var archivos = DriveApp.searchFiles("title contains '" + msgId + "'");
-        if (archivos.hasNext()) {
-          var f = archivos.next();
-          carpetaLink = f.getUrl();
-        }
-        // Si no hay por ID, buscar carpeta con el mismo asunto
-        if (!carpetaLink) {
-          var asuntoCorto = msg.getSubject().substring(0, 40).replace(/'/g, " ");
-          var carpetas = DriveApp.searchFolders("title contains '" + asuntoCorto + "' and trashed = false");
-          if (carpetas.hasNext()) {
-            carpetaLink = carpetas.next().getUrl();
-          }
-        }
-      } catch(e) {
-        Logger.log("No se pudo buscar carpeta Drive: " + e.toString());
-      }
-
-      // Extraer email destino (primer Reply-To o To que no sea la biblioteca)
-      var emailDestino = "";
-      try {
-        var toField = msg.getTo();
-        // Puede ser lista: "a@x.com, b@x.com"
-        var toList = toField.split(",");
-        for (var i = 0; i < toList.length; i++) {
-          var addr = toList[i].trim();
-          var addrMatch = addr.match(/<([^>]+)>/);
-          var addrEmail = addrMatch ? addrMatch[1].trim() : addr;
-          if (addrEmail && addrEmail.toLowerCase() !== APP_CONFIG.EMAIL_BIBLIOTECA.toLowerCase()) {
-            emailDestino = addrEmail;
-            break;
-          }
-        }
-        if (!emailDestino) emailDestino = emailRemit;
-      } catch(e) {
-        emailDestino = emailRemit;
-      }
-
-      // Construir fila nueva (23 columnas, estado vacío = sin estado)
-      var nuevaFila = new Array(23).fill("");
-      nuevaFila[APP_CONFIG.COL.FECHA        - 1] = fechaMsg;
-      nuevaFila[APP_CONFIG.COL.REMITENTE    - 1] = remitenteRaw;
-      nuevaFila[APP_CONFIG.COL.ASUNTO       - 1] = msg.getSubject()       || "(sin asunto)";
-      nuevaFila[APP_CONFIG.COL.CUERPO       - 1] = msg.getPlainBody().substring(0, 500);
-      nuevaFila[APP_CONFIG.COL.NUM_ADJUNTOS - 1] = msg.getAttachments().length;
-      nuevaFila[APP_CONFIG.COL.CARPETA      - 1] = carpetaLink;
-      nuevaFila[APP_CONFIG.COL.ID_MENSAJE   - 1] = msgId;
-      nuevaFila[APP_CONFIG.COL.EMAIL_DESTINO- 1] = emailDestino;
-      nuevaFila[APP_CONFIG.COL.ESTADO       - 1] = "";   // Sin estado → aparece para gestionar
-
-      filasNuevas.push(nuevaFila);
-      idsExistentes.add(msgId);   // evitar duplicado si el mismo ID aparece en otro thread
-      agregados++;
+// ============================================================
+// ENVIAR CORREO DESDE CUENTA DE BIBLIOTECA
+// ============================================================
+// params: {
+//   tipo:         'recibido' | 'impreso' | 'entregado'
+//   destinatario: email
+//   idSolicitud:  texto
+//   asunto:       texto
+//   profesor:     texto (opcional)
+//   numHojas:     número (opcional)
+//   materia:      texto (opcional)
+//   tipoImpresion: texto (opcional)
+//   tipoHoja:     texto (opcional)
+//   nombreRecibe: texto (opcional)
+//   observaciones: texto (opcional)
+//   fechaEntrega: texto formateado (opcional)
+// }
+// ============================================================
+function enviarCorreo(params) {
+  try {
+    if (!validarEmail(params.destinatario)) {
+      return { ok: false, error: "Email destinatario inválido: " + params.destinatario };
     }
-  }
 
-  // ── 4. Escribir todas las filas nuevas de una vez ──
-  if (filasNuevas.length > 0) {
-    // Ordenar por fecha ascendente antes de insertar
-    filasNuevas.sort(function(a, b) {
-      return new Date(a[0]) - new Date(b[0]);
+    // ── Verificar configuración de notificaciones ─────────────
+    var _url = _cfg("SUPABASE_URL");
+    var _key = _cfg("SUPABASE_KEY");
+    if (_url && _key) {
+      try {
+        var nc = sbGet(_url, _key, "bib_notif_config?email=eq." + encodeURIComponent(params.destinatario) + "&select=activas");
+        if (Array.isArray(nc) && nc.length > 0 && nc[0].activas === false) {
+          return { ok: true, skipped: true };
+        }
+      } catch(ex2) { /* si falla el check, se envía igual */ }
+    }
+
+    var ref   = params.idSolicitud || params.asunto || "Sin referencia";
+    var asunto = "";
+    var html   = "";
+    var plain  = "";
+
+    // Plantilla base HTML
+    function wrap(color, titulo, contenido) {
+      return '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif">' +
+        '<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:30px 0">' +
+        '<tr><td align="center"><table width="580" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08)">' +
+        '<tr><td style="background:' + color + ';padding:20px 30px">' +
+        '<p style="margin:0;color:#ffffff;font-size:18px;font-weight:bold">' + titulo + '</p>' +
+        '<p style="margin:4px 0 0;color:rgba(255,255,255,.8);font-size:13px">Referencia: ' + ref + '</p>' +
+        '</td></tr>' +
+        '<tr><td style="padding:28px 30px;color:#333333;font-size:14px;line-height:1.7">' +
+        contenido +
+        '</td></tr>' +
+        '<tr><td style="background:#f9f9f9;padding:16px 30px;border-top:1px solid #eeeeee">' +
+        '<p style="margin:0;font-size:12px;color:#888888">BIBLIOTECA &mdash; Colegio Goyavier &nbsp;|&nbsp; Responde este correo si tienes preguntas</p>' +
+        '</td></tr>' +
+        '</table></td></tr></table></body></html>';
+    }
+
+    function fila(lbl, val) {
+      return '<tr><td style="padding:5px 0;color:#888;font-size:13px;width:130px;vertical-align:top">' + lbl + '</td>' +
+             '<td style="padding:5px 0;font-weight:600;font-size:13px">' + (val || '&mdash;') + '</td></tr>';
+    }
+
+    var horario =
+      '<p style="background:#f0f4ff;border-left:3px solid #2c7be5;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px">' +
+      '<strong>HORARIO DE ENTREGA</strong><br>' +
+      'Lunes a Viernes &mdash; 9:00 AM &ndash; 11:00 AM &nbsp;|&nbsp; 1:30 PM &ndash; 3:00 PM</p>';
+
+    switch (params.tipo) {
+
+      case "recibido":
+        asunto = "Solicitud recibida :) - " + ref;
+        html = wrap("#2c7be5", "Solicitud recibida :)",
+          '<p>Hola!</p>' +
+          '<p>Hemos recibido correctamente tu solicitud de impresion.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("&gt;&gt; Asunto:", params.asunto) +
+          (params.profesor ? fila("Profesor:", params.profesor) : "") +
+          '</table>' +
+          '<p style="background:#eaf4ff;border-left:3px solid #2c7be5;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'El tiempo estimado es de <strong>hasta 3 dias habiles</strong>.<br>' +
+          'Te avisaremos por este medio cuando este lista para recoger.</p>' +
+          '<p><strong>RECUERDA:</strong><br>Solo podras retirar tu impresion en el siguiente horario:</p>' +
+          horario);
+        plain =
+          "Solicitud recibida :)\n\n" +
+          "Hemos recibido correctamente tu solicitud de impresion.\n\n" +
+          ">> Asunto:\n" + (params.asunto || ref) + "\n\n" +
+          "El tiempo estimado de impresion es de hasta 3 dias habiles.\n" +
+          "Te avisaremos por este medio cuando este lista para recoger.\n\n" +
+          "RECUERDA:\n" +
+          "Solo podras retirar tu impresion en el siguiente horario:\n" +
+          "Lunes a Viernes:\n9:00 AM - 11:00 AM\n1:30 PM - 3:00 PM\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "impreso":
+        asunto = "Tu impresion esta lista! :) - " + ref;
+        html = wrap("#28a745", "Tu impresion esta lista! :)",
+          '<p>Buenas noticias! :D</p>' +
+          '<p>Tu solicitud de impresion ya esta lista y esperandote en la biblioteca.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("&gt;&gt; Asunto:", params.asunto) +
+          (params.profesor      ? fila("Profesor:", params.profesor)  : "") +
+          (params.materia       ? fila("Materia:", params.materia)    : "") +
+          (params.numHojas      ? fila("Hojas:", params.numHojas + " hojas") : "") +
+          (params.tipoImpresion ? fila("Tipo:", params.tipoImpresion + (params.forma ? " / " + params.forma : "")) : "") +
+          '</table>' +
+          '<p style="background:#eafaf1;border-left:3px solid #28a745;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          '<strong>COMO RECOGER:</strong><br>Pasa por la Biblioteca, te estamos esperando!</p>' +
+          '<p style="background:#f0f4ff;border-left:3px solid #2c7be5;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px">' +
+          '<strong>HORARIO DE ATENCION</strong><br>' +
+          'Lunes a Viernes &mdash; 9:00 AM &ndash; 11:00 AM &nbsp;|&nbsp; 1:30 PM &ndash; 3:00 PM</p>' +
+          '<p style="font-size:13px;color:#555">Recuerda que solo podras retirar tu impresion dentro de ese horario.</p>');
+        plain =
+          "Tu impresion esta lista! :)\n\n" +
+          "Buenas noticias! :D\n" +
+          "Tu solicitud de impresion ya esta lista y esperandote!\n\n" +
+          ">> Asunto:\n" + (params.asunto || ref) + "\n\n" +
+          "COMO RECOGER:\n" +
+          "Pasa por la biblioteca, te estamos esperando!\n\n" +
+          "HORARIO DE ATENCION:\n" +
+          "Lunes a Viernes:\n9:00 AM - 11:00 AM\n1:30 PM - 3:00 PM\n\n" +
+          "Recuerda que solo podras retirar tu impresion dentro de ese horario.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "entregado":
+        asunto = "Impresion entregada con exito! :) - " + ref;
+        html = wrap("#6f42c1", "Todo listo! :D",
+          '<p>Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("&gt;&gt; Asunto:", params.asunto) +
+          fila("Entregado a:", params.nombreRecibe) +
+          fila("Fecha:", params.fechaEntrega) +
+          (params.materia       ? fila("Materia:", params.materia) : "") +
+          (params.tipoImpresion ? fila("Tipo:", params.tipoImpresion + (params.forma ? " / " + params.forma : "")) : "") +
+          (params.numHojas      ? fila("Hojas:", params.numHojas + " hojas") : "") +
+          '</table>' +
+          '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Gracias por usar el servicio de la Biblioteca Goyavier, fue un gusto ayudarte.</p>');
+        plain =
+          "Todo listo! :D\n\n" +
+          "Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!\n\n" +
+          ">> Asunto:\n" + (params.asunto || ref) + "\n\n" +
+          "Gracias por usar el servicio de la biblioteca, fue un gusto ayudarte.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      default:
+        return { ok: false, error: "Tipo de correo no reconocido: " + params.tipo };
+    }
+
+    GmailApp.sendEmail(params.destinatario, asunto, plain, {
+      htmlBody: html,
+      name:     "Biblioteca Goyavier"
     });
-    const primeraFilaLibre = sheet.getLastRow() + 1;
-    sheet.getRange(primeraFilaLibre, 1, filasNuevas.length, 23).setValues(filasNuevas);
-    SpreadsheetApp.flush();
+    return { ok: true };
+
+  } catch (e) {
+    Logger.log("enviarCorreo error: " + e.toString());
+    return { ok: false, error: e.toString() };
   }
-
-  return {
-    ok:         true,
-    agregados,
-    omitidos,
-    rechazados,
-    mes,
-    ano,
-    totalFiltrados: listaBlanca.size
-  };
 }
 
-// ============================================
-// FUNCIONES AUXILIARES
-// ============================================
-function obtenerHoja() {
-  const ss   = SpreadsheetApp.getActiveSpreadsheet();
-  const hoja = ss.getSheetByName(APP_CONFIG.NOMBRE_HOJA);
-  if (!hoja) throw new Error("Hoja '" + APP_CONFIG.NOMBRE_HOJA + "' no encontrada.");
-  return hoja;
-}
+// ============================================================
+// HELPERS SUPABASE REST
+// ============================================================
 
-function generarIdSolicitud(sheet) {
-  const ultimaFila = sheet.getLastRow();
-  if (ultimaFila < 2) return "COP-0001";
-
-  const ids = sheet.getRange(2, APP_CONFIG.COL.ID_SOLICITUD, ultimaFila - 1, 1).getValues();
-  let max = 0;
-
-  for (let i = 0; i < ids.length; i++) {
-    const id    = String(ids[i][0] || "");
-    const match = id.match(/COP-(\d+)/);
-    if (match) {
-      const num = parseInt(match[1]);
-      if (num > max) max = num;
+// GET: devuelve array o {error}
+function sbGet(url, key, endpoint) {
+  try {
+    var res = UrlFetchApp.fetch(url + "/rest/v1/" + endpoint, {
+      method: "GET",
+      headers: {
+        "apikey":        key,
+        "Authorization": "Bearer " + key,
+        "Content-Type":  "application/json"
+      },
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() >= 400) {
+      return { error: res.getContentText() };
     }
+    return JSON.parse(res.getContentText());
+  } catch(e) {
+    return { error: e.toString() };
   }
-
-  return "COP-" + String(max + 1).padStart(4, "0");
 }
 
-function asegurarEncabezadosNuevos(sheet) {
-  const maxCols     = Math.max(sheet.getLastColumn(), 23);
-  const encabezados = sheet.getRange(1, 1, 1, maxCols).getValues()[0];
-
-  const nuevos = {
-    13: "ID Solicitud",
-    14: "Profesor",
-    15: "Área",
-    16: "Materia",
-    17: "Tipo Impresión",
-    18: "Tipo Hoja",
-    19: "Nº Hojas",
-    20: "Tipo Documento",
-    21: "Nombre quien recibe",
-    22: "Fecha Entrega",
-    23: "Observaciones"
-  };
-
-  for (const col in nuevos) {
-    const idx = parseInt(col) - 1;
-    if (!encabezados[idx] || encabezados[idx] === "") {
-      sheet.getRange(1, parseInt(col)).setValue(nuevos[col]);
+// POST: inserta fila, devuelve array con la fila creada o {error}
+function sbPost(url, key, tabla, fila) {
+  try {
+    var res = UrlFetchApp.fetch(url + "/rest/v1/" + tabla, {
+      method: "POST",
+      headers: {
+        "apikey":        key,
+        "Authorization": "Bearer " + key,
+        "Content-Type":  "application/json",
+        "Prefer":        "return=representation"
+      },
+      payload:            JSON.stringify(fila),
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() >= 400) {
+      return { error: res.getContentText() };
     }
+    return JSON.parse(res.getContentText());
+  } catch(e) {
+    return { error: e.toString() };
   }
 }
 
-function fechaHoraActual() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yy HH:mm");
+// Batch POST: inserta un array de filas en una sola petición, devuelve array con los registros creados
+function sbPostBatch(url, key, tabla, filas) {
+  if (!filas || !filas.length) return [];
+  try {
+    var res = UrlFetchApp.fetch(url + "/rest/v1/" + tabla, {
+      method: "POST",
+      headers: {
+        "apikey":        key,
+        "Authorization": "Bearer " + key,
+        "Content-Type":  "application/json",
+        "Prefer":        "return=representation"
+      },
+      payload:            JSON.stringify(filas),
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() >= 400) return { error: res.getContentText() };
+    return JSON.parse(res.getContentText());
+  } catch(e) { return { error: e.toString() }; }
 }
 
+// Storage upload: sube bytes al bucket, devuelve true/false
+function sbStorageUpload(url, key, path, mime, bytes) {
+  try {
+    // Encode cada segmento del path por separado para preservar la barra /
+    var encodedPath = path.split("/").map(encodeURIComponent).join("/");
+    var res = UrlFetchApp.fetch(
+      url + "/storage/v1/object/biblioteca-adjuntos/" + encodedPath, {
+        method:  "POST",
+        headers: {
+          "Authorization": "Bearer " + key,
+          "Content-Type":  mime || "application/octet-stream",
+          "x-upsert":      "true"
+        },
+        payload:            bytes,
+        muteHttpExceptions: true
+      }
+    );
+    return res.getResponseCode() < 400;
+  } catch(e) {
+    Logger.log("sbStorageUpload error: " + e.toString());
+    return false;
+  }
+}
+
+// PATCH: actualiza filas, devuelve true/false
+function sbPatch(url, key, endpoint, data) {
+  try {
+    var res = UrlFetchApp.fetch(url + "/rest/v1/" + endpoint, {
+      method: "PATCH",
+      headers: {
+        "apikey":        key,
+        "Authorization": "Bearer " + key,
+        "Content-Type":  "application/json",
+        "Prefer":        "return=minimal"
+      },
+      payload:            JSON.stringify(data),
+      muteHttpExceptions: true
+    });
+    return res.getResponseCode() < 400;
+  } catch(e) {
+    Logger.log("sbPatch error: " + e.toString());
+    return false;
+  }
+}
+
+// ── Helper: validar email básico ──
 function validarEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }

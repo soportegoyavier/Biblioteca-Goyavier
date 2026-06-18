@@ -977,6 +977,43 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
   </div>
 </div>
 
+<!-- MODAL ELIMINAR CORREO -->
+<div class="mo" id="modal-eliminar">
+  <div class="mc" style="max-width:440px">
+    <div class="mh">
+      <div class="mh-ico red"><i class="fa fa-trash-can" style="color:var(--red)"></i></div>
+      <div class="mh-info">
+        <h3>Eliminar correo</h3>
+        <div class="mh-sub" id="melim-info" style="color:var(--muted);font-size:12px"></div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-eliminar')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <div class="info-box" style="border-color:rgba(248,81,73,.3);background:rgba(248,81,73,.05);margin-bottom:14px">
+        <i class="fa fa-triangle-exclamation" style="color:var(--red)"></i>
+        El correo y sus archivos se eliminarán permanentemente. El ID del mensaje quedará guardado
+        para que no vuelva a importarse al sincronizar.
+      </div>
+      <div class="fgroup">
+        <label>Motivo (opcional)</label>
+        <select id="melim-motivo" class="fc">
+          <option value="">Sin especificar</option>
+          <option value="Spam o publicidad no deseada">Spam o publicidad no deseada</option>
+          <option value="Correo enviado por error">Correo enviado por error</option>
+          <option value="Contenido irrelevante">Contenido irrelevante</option>
+          <option value="Correo duplicado">Correo duplicado</option>
+        </select>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-eliminar')">Cancelar</button>
+      <button class="btn" id="btn-conf-eliminar" style="background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.3)" onclick="confirmarEliminar()">
+        <i class="fa fa-trash-can fa-sm"></i> Eliminar definitivamente
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL ABONO (pago adicional a trabajo personal) -->
 <div class="mo" id="modal-abono">
   <div class="mc" style="max-width:380px">
@@ -1277,6 +1314,7 @@ let _abonoTrabajoId   = null;
 let _abonoSolicitudId = null;
 let _cancelarId       = null;
 let _cancelarTipo     = 'copias';
+let _eliminarId       = null;
 let _abonoEmailRemit  = null;
 
 // ── UTILS FINANCIEROS ─────────────────────────────────────────
@@ -1341,13 +1379,14 @@ function renderVentas(rows) {
         <div class="vt-fin-item" style="margin-left:auto"><div class="vt-fin-lbl">${trabs.length} trabajo${trabs.length>1?'s':''}</div></div>
       </div>` : '';
     const cancelVtBtn = !esCancelado ? `<button class="btn" style="padding:4px 8px;font-size:11px;background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)" onclick="event.stopPropagation();abrirModalCancelar(${r.id},'ventas')" title="Cancelar solicitud"><i class="fa fa-ban fa-xs"></i></button>` : '';
+    const elimVtBtn   = `<button class="btn" style="padding:4px 8px;font-size:11px;background:rgba(248,81,73,.18);color:var(--red);border:1px solid rgba(248,81,73,.35)" onclick="event.stopPropagation();abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>`;
     return `<div class="vt-card" ${!esCancelado ? `onclick="abrirModalPersonal(${r.id})"` : 'style="opacity:.65;cursor:default"'}>
       <div class="vt-top">
         <div class="vt-info">
           <div class="vt-email">${r.remitente_email}</div>
           <div class="vt-date">${fmtFecha(r.fecha_recepcion)}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${cancelVtBtn}</div>
+        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${cancelVtBtn}${elimVtBtn}</div>
       </div>
       <div class="vt-asunto">${r.asunto||'—'}</div>
       ${finHtml}
@@ -1959,7 +1998,10 @@ function filaHTML(r) {
     <td>${badge(r.estado)}</td>
     <td class="td-m">${hojas > 0 ? hojas : '—'}</td>
     <td>${accionHTML(r)}</td>
-    <td><button class="btn btn-detail" onclick="verDetalle(${r.id})"><i class="fa fa-eye fa-sm"></i></button></td>
+    <td style="display:flex;gap:4px;align-items:center">
+      <button class="btn btn-detail" onclick="verDetalle(${r.id})"><i class="fa fa-eye fa-sm"></i></button>
+      <button class="btn" style="padding:4px 7px;background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)" onclick="abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-sm"></i></button>
+    </td>
   </tr>`;
 }
 
@@ -1993,6 +2035,7 @@ function renderCards(rows) {
         ${r.estado==='recibido' ?`<button class="btn btn-nb" onclick="abrirModalImpreso(${r.id})"><i class="fa fa-print fa-sm"></i> Imprimir</button>`:''}
         ${r.estado==='impreso'  ?`<button class="btn btn-nc" onclick="abrirModalEntrega(${r.id})"><i class="fa fa-box-open fa-sm"></i> Entregar</button>`:''}
         ${['pendiente','recibido','impreso'].includes(r.estado)?`<button class="btn" style="padding:5px 9px;background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)" onclick="abrirModalCancelar(${r.id},'copias')"><i class="fa fa-ban fa-xs"></i></button>`:''}
+        <button class="btn" style="padding:5px 9px;background:rgba(248,81,73,.18);color:var(--red);border:1px solid rgba(248,81,73,.35)" onclick="abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>
         <button class="btn btn-detail" onclick="verDetalle(${r.id})"><i class="fa fa-eye fa-sm"></i> Detalle</button>
       </div>
     </div>`).join('');
@@ -2556,6 +2599,57 @@ async function confirmarCancelacion() {
     toast('Solicitud cancelada', 'success');
     cerrarModal('modal-cancelar');
     if (_cancelarTipo === 'ventas') {
+      await cargarVentas();
+    } else {
+      await cargarSolicitudes();
+      await actualizarBadges();
+    }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.classList.remove('loading'); btn.disabled = false;
+  }
+}
+
+// ── ELIMINAR CORREO ───────────────────────────────────────────
+function abrirModalEliminar(id) {
+  _eliminarId = id;
+  const motEl  = document.getElementById('melim-motivo');
+  const infoEl = document.getElementById('melim-info');
+  if (motEl)  motEl.value = '';
+  if (infoEl) infoEl.textContent = 'Correo #' + id;
+  document.getElementById('modal-eliminar').classList.add('open');
+}
+
+async function confirmarEliminar() {
+  if (!_eliminarId) return;
+  const motivo = document.getElementById('melim-motivo')?.value || '';
+  const btn    = document.getElementById('btn-conf-eliminar');
+  btn.classList.add('loading'); btn.disabled = true;
+  try {
+    // Obtener gmail_message_id, remitente y asunto antes de borrar
+    const { data: sol, error: eGet } = await _sb.from('bib_solicitudes')
+      .select('gmail_message_id,remitente_email,asunto')
+      .eq('id', _eliminarId).single();
+    if (eGet) throw eGet;
+
+    // Registrar en lista de ignorados para que no se reimporte
+    if (sol.gmail_message_id) {
+      await _sb.from('bib_mensajes_ignorados').upsert({
+        gmail_message_id: sol.gmail_message_id,
+        remitente_email:  sol.remitente_email || null,
+        asunto:           sol.asunto          || null,
+        motivo:           motivo              || null
+      }, { onConflict: 'gmail_message_id' });
+    }
+
+    // Eliminar solicitud (cascade borra documentos, trabajos, historial, pagos)
+    const { error: eDel } = await _sb.from('bib_solicitudes').delete().eq('id', _eliminarId);
+    if (eDel) throw eDel;
+
+    toast('Correo eliminado y bloqueado', 'success');
+    cerrarModal('modal-eliminar');
+    if (_pagina === 'ventas') {
       await cargarVentas();
     } else {
       await cargarSolicitudes();
