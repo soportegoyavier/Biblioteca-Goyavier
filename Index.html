@@ -2643,7 +2643,10 @@ async function confirmarEliminar() {
       }, { onConflict: 'gmail_message_id' });
     }
 
-    // Eliminar solicitud (cascade borra documentos, trabajos, historial, pagos)
+    // bib_pagos.solicitud_id no tiene ON DELETE CASCADE — borrar pagos explícitamente primero
+    await _sb.from('bib_pagos').delete().eq('solicitud_id', _eliminarId);
+
+    // Eliminar solicitud (cascade borra documentos, trabajos_personal e historial)
     const { error: eDel } = await _sb.from('bib_solicitudes').delete().eq('id', _eliminarId);
     if (eDel) throw eDel;
 
