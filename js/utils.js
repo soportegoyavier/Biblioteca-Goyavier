@@ -59,6 +59,23 @@ function gasCall(accion, params = {}) {
   });
 }
 
+// ── VER ARCHIVO EN NUEVA PESTAÑA (blob URL fuerza renderizado inline) ─
+async function verArchivo(url, mime) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Error al obtener el archivo');
+    const buf = await res.arrayBuffer();
+    const type = mime && mime !== 'application/octet-stream' ? mime : 'application/pdf';
+    const blob = new Blob([buf], { type });
+    const blobUrl = URL.createObjectURL(blob);
+    const win = window.open(blobUrl, '_blank');
+    if (!win) toast('Permite ventanas emergentes para ver archivos', 'info');
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+  } catch(e) {
+    toast('No se pudo abrir el archivo: ' + e.message, 'error');
+  }
+}
+
 // ── MODALES ───────────────────────────────────────────────────
 function cerrarModal(id) { document.getElementById(id).classList.remove('open'); }
 document.addEventListener('keydown', e => {
