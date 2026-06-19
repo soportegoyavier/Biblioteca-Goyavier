@@ -101,6 +101,21 @@ async function verArchivo(url, mime) {
   }
 }
 
+// ── TEMA CLARO / OSCURO ───────────────────────────────────────
+function _aplicarTema(tema) {
+  document.documentElement.setAttribute('data-theme', tema);
+  const lbl = document.getElementById('theme-lbl');
+  if (lbl) lbl.textContent = tema === 'light' ? 'Modo oscuro' : 'Modo claro';
+}
+function toggleTema() {
+  const actual = document.documentElement.getAttribute('data-theme');
+  const nuevo = actual === 'light' ? 'dark' : 'light';
+  _aplicarTema(nuevo);
+  localStorage.setItem('bib_tema', nuevo);
+}
+// Aplicar tema guardado al cargar
+_aplicarTema(localStorage.getItem('bib_tema') || 'dark');
+
 // ── LIMPIEZA AUTOMÁTICA DE ARCHIVOS ──────────────────────────
 // Corre una vez por mes al iniciar sesión.
 // Borra de Storage los archivos de solicitudes ya entregadas de meses anteriores.

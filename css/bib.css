@@ -18,6 +18,20 @@
   --shadow-lg:0 16px 56px rgba(0,0,0,.7);
   --inp:#111113;
 }
+/* MODO CLARO */
+[data-theme="light"]{
+  --bg:#f0f0f5;--s1:#ffffff;--s2:#f5f5fa;--s3:#eaeaf2;
+  --border:#d8d8e4;--border2:#c4c4d4;
+  --text:#1c1c2e;--muted:#60607a;--dim:#9898b2;
+  --shadow:0 4px 24px rgba(0,0,0,.10);--shadow-lg:0 16px 56px rgba(0,0,0,.14);
+  --inp:#ffffff;
+  --accent-bg:rgba(179,157,219,.18);
+  --green-bg:rgba(61,214,140,.14);--blue-bg:rgba(72,149,239,.14);
+  --red-bg:rgba(248,81,73,.14);--amber-bg:rgba(240,136,62,.14);--purple-bg:rgba(163,113,247,.14);
+}
+/* botón toggle tema */
+.btn-theme{width:100%;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:6px 4px;font-family:inherit;transition:color .15s;margin-bottom:4px}
+.btn-theme:hover{color:var(--accent)}
 html,body{height:100%;overflow:hidden;font-family:'Poppins',sans-serif;font-size:14px;line-height:1.5;background:var(--bg);color:var(--text)}
 
 /* LOGIN */
