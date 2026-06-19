@@ -123,6 +123,14 @@ async function abrirModalImpreso(id) {
   _archivosAsignados = new Set();
   _asuntoSolicitud = '';
   resetSSDisplay();
+  // Cargar profesores desde Supabase si aún no están cargados
+  if (!Object.keys(_profesoresData).length) {
+    const { data: profs } = await _sb.from('bib_profesores').select('nombre,area').order('nombre');
+    if (profs && profs.length) {
+      _profesoresData = {};
+      profs.forEach(p => { _profesoresData[p.nombre] = { area: p.area || '' }; });
+    }
+  }
   document.getElementById('mi-obs').value    = '';
   document.getElementById('mi-nombre').value = '';
   document.getElementById('mi-trab-section').style.display = 'none';
@@ -258,7 +266,7 @@ function agregarTrabajo() {
     if (!hoja)      { toast(`"${nom}": selecciona el tamaño de hoja`, 'error'); return; }
 
     const hojas = modo === 'Doble cara' ? copias * Math.ceil(pags / 2) : copias * pags;
-    archivos.push({ nombre: nom, copias, paginas: pags, tipo_impresion: tipo, modo_impresion: modo, tamano_hoja: hoja, total_hojas: hojas });
+    archivos.push({ doc_id: parseInt(fid), nombre: nom, copias, paginas: pags, tipo_impresion: tipo, modo_impresion: modo, tamano_hoja: hoja, total_hojas: hojas });
     _archivosAsignados.add(fid);
   }
 
@@ -328,9 +336,31 @@ async function confirmarImpreso() {
     const { error: errT } = await _sb.from('bib_trabajos_impresion').insert(rows);
     if (errT) throw errT;
 
+    // Actualizar bib_documentos con la config real de impresión
+    const docUpdates = [];
+    for (const t of _trabajosImpresion) {
+      for (const a of (t.archivos || [])) {
+        if (a.doc_id) {
+          docUpdates.push(
+            _sb.from('bib_documentos')
+              .update({ num_hojas: a.total_hojas, tipo_impresion: a.tipo_impresion, forma_impresion: a.modo_impresion })
+              .eq('id', a.doc_id)
+          );
+        }
+      }
+    }
+    if (docUpdates.length) await Promise.all(docUpdates);
+
     const ahora = new Date().toISOString();
+    const primerProf = _trabajosImpresion[0]?.profesor || null;
+    const pdProf     = primerProf ? (_profesoresData[primerProf] || {}) : {};
     const { data: sol, error } = await _sb.from('bib_solicitudes')
-      .update({ estado: 'impreso', notif_impreso_en: ahora })
+      .update({
+        estado: 'impreso',
+        notif_impreso_en: ahora,
+        profesor: primerProf,
+        area:     pdProf.area || null
+      })
       .eq('id', _idImpreso)
       .select('id_solicitud,asunto,email_destino,remitente_email,profesor,materia').single();
     if (error) throw error;
@@ -381,19 +411,27 @@ function closeSS() {
 }
 
 function renderSSOptions(q) {
-  const list    = document.getElementById('ss-list');
+  const list = document.getElementById('ss-list');
   if (!list) return;
-  const matches = q ? PROFS_LISTA.filter(p => p.toLowerCase().includes(q.toLowerCase())) : PROFS_LISTA;
+  const lista = Object.keys(_profesoresData).length ? Object.keys(_profesoresData) : PROFS_LISTA;
+  const matches = q ? lista.filter(p => p.toLowerCase().includes(q.toLowerCase())) : lista;
   const visible = matches.slice(0, 60);
   if (!visible.length) { list.innerHTML = '<div class="ss-empty">Sin resultados</div>'; return; }
   list.innerHTML = visible.map(p => {
-    const on = _profSeleccionado === p;
-    return `<div class="ss-opt${on?' on':''}" onclick="selectProfesor('${p.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">${escHtml(p)}</div>`;
+    const on  = _profSeleccionado === p;
+    const pd  = _profesoresData[p] || {};
+    const sub = pd.area || '';
+    return `<div class="ss-opt${on?' on':''}" onclick="selectProfesor('${p.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">
+      <div>${escHtml(p)}</div>
+      ${sub ? `<div style="font-size:11px;color:var(--muted);margin-top:1px">${escHtml(sub)}</div>` : ''}
+    </div>`;
   }).join('');
 }
 
 function selectProfesor(nombre) {
   _profSeleccionado = nombre;
+  const pd = _profesoresData[nombre] || {};
+  _profArea = pd.area || null;
   const display = document.getElementById('ss-display');
   if (display) { display.textContent = nombre; display.className = 'ss-selected'; }
   closeSS();
@@ -401,6 +439,7 @@ function selectProfesor(nombre) {
 
 function resetSSDisplay() {
   _profSeleccionado = null;
+  _profArea         = null;
   const display = document.getElementById('ss-display');
   if (display) { display.textContent = 'Buscar o seleccionar...'; display.className = 'ss-placeholder'; }
   closeSS();
@@ -511,7 +550,6 @@ async function verDetalle(id) {
       <hr class="msep">
       <div class="dr"><span class="dlbl">Profesor</span><span class="dval">${data.profesor||'—'}</span></div>
       <div class="dr"><span class="dlbl">Área</span><span class="dval">${data.area||'—'}</span></div>
-      <div class="dr"><span class="dlbl">Materia</span><span class="dval">${data.materia||'—'}</span></div>
       ${data.observaciones?`<div class="dr"><span class="dlbl">Observaciones</span><span class="dval">${data.observaciones}</span></div>`:''}
       ${data.estado==='entregado'?`
       <hr class="msep">

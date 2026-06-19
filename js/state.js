@@ -8,6 +8,8 @@ let _trabajosImpresion = [];
 let _archivosDisponibles = [];
 let _archivosAsignados = new Set();
 let _profSeleccionado = null;
+let _profArea         = null;
+let _profesoresData   = {}; // nombre → { area }
 let _asuntoSolicitud = '';
 
 let _mes = _hoy.getMonth();
