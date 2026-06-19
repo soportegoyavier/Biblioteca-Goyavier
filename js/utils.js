@@ -59,10 +59,31 @@ function gasCall(accion, params = {}) {
   });
 }
 
-// ── VER ARCHIVO EN NUEVA PESTAÑA (blob URL fuerza renderizado inline) ─
+// ── VER ARCHIVO EN NUEVA PESTAÑA ─────────────────────────────
+// PDF/imagen → blob URL (visor nativo del navegador)
+// Office (doc/xls/ppt) → Microsoft Office Online Viewer
 async function verArchivo(url, mime) {
-  // Abrir ventana SÍNCRONAMENTE dentro del handler de usuario.
-  // Si se abre dentro de un await, el navegador lo bloquea como popup.
+  const officeTypes = [
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ];
+  const isOffice = officeTypes.includes(mime) ||
+    /\.(doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i.test(url);
+
+  if (isOffice) {
+    // Office Online no necesita fetch; abre síncronamente
+    const viewerUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(url);
+    const win = window.open(viewerUrl, '_blank');
+    if (!win) toast('Permite ventanas emergentes para ver archivos', 'info');
+    return;
+  }
+
+  // PDF e imágenes: blob URL para forzar renderizado inline
+  // Abrir ventana SÍNCRONAMENTE — si se abre tras un await el navegador lo bloquea
   const win = window.open('about:blank', '_blank');
   if (!win) { toast('Permite ventanas emergentes para ver archivos', 'info'); return; }
   try {
