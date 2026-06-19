@@ -211,6 +211,12 @@ function renderArchivosConConfig() {
             <label class="fc-radio-lbl"><input type="radio" name="fmodo-${fid}" value="Una cara"><i class="fa fa-file fa-sm"></i> Una cara</label>
             <label class="fc-radio-lbl"><input type="radio" name="fmodo-${fid}" value="Doble cara"><i class="fa fa-copy fa-sm"></i> Doble cara</label>
           </div>
+          <div class="fc-radio-group">
+            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="Carta"> Carta</label>
+            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="Oficio"> Oficio</label>
+            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="Doble Carta"> Doble Carta</label>
+            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="A4"> A4</label>
+          </div>
         </div>
       </div>
     </div>`;
@@ -243,14 +249,16 @@ function agregarTrabajo() {
     const pags   = parseInt((document.getElementById('fpaginas-' + fid) || {}).value) || 0;
     const tipo   = (document.querySelector(`input[name="ftipo-${fid}"]:checked`) || {}).value || '';
     const modo   = (document.querySelector(`input[name="fmodo-${fid}"]:checked`) || {}).value || '';
+    const hoja   = (document.querySelector(`input[name="fhoja-${fid}"]:checked`) || {}).value || '';
 
     if (copias < 1) { toast(`"${nom}": copias debe ser ≥ 1`, 'error'); return; }
     if (pags   < 1) { toast(`"${nom}": páginas debe ser ≥ 1`, 'error'); return; }
     if (!tipo)      { toast(`"${nom}": selecciona B&N o Color`, 'error'); return; }
     if (!modo)      { toast(`"${nom}": selecciona Una o Doble cara`, 'error'); return; }
+    if (!hoja)      { toast(`"${nom}": selecciona el tamaño de hoja`, 'error'); return; }
 
     const hojas = modo === 'Doble cara' ? copias * Math.ceil(pags / 2) : copias * pags;
-    archivos.push({ nombre: nom, copias, paginas: pags, tipo_impresion: tipo, modo_impresion: modo, total_hojas: hojas });
+    archivos.push({ nombre: nom, copias, paginas: pags, tipo_impresion: tipo, modo_impresion: modo, tamano_hoja: hoja, total_hojas: hojas });
     _archivosAsignados.add(fid);
   }
 
@@ -281,7 +289,7 @@ function renderTrabajosCards() {
       `<div style="display:flex;align-items:baseline;gap:6px;margin-top:3px;font-size:12px">
         <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
         <span>${escHtml(a.nombre)}</span>
-        <span style="color:var(--muted);white-space:nowrap">${a.copias}c × ${a.paginas}p — ${escHtml(a.tipo_impresion)} — ${escHtml(a.modo_impresion)}</span>
+        <span style="color:var(--muted);white-space:nowrap">${a.copias}c × ${a.paginas}p — ${escHtml(a.tipo_impresion)} — ${escHtml(a.modo_impresion)}${a.tamano_hoja ? ' — ' + escHtml(a.tamano_hoja) : ''}</span>
       </div>`
     ).join('');
     return `<div class="trab-card">
