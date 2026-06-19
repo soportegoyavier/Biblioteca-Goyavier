@@ -5,15 +5,15 @@ async function cargarReportes() {
     const p1 = new Date(_hoy.getFullYear(), _hoy.getMonth(), 1).toISOString();
     const p2 = new Date(_hoy.getFullYear(), _hoy.getMonth() + 1, 1).toISOString();
     const pa  = new Date(_hoy.getFullYear(), 0, 1).toISOString();
-    const [{ data: mesD }, { data: anoD }, { data: topD }, { data: destD }] = await Promise.all([
+    const [{ data: mesD }, { data: anoD }, { data: topD }] = await Promise.all([
       _sb.from('bib_documentos').select('num_hojas,tipo_impresion,forma_impresion,bib_solicitudes!inner(fecha_recepcion)')
         .gte('bib_solicitudes.fecha_recepcion', p1).lt('bib_solicitudes.fecha_recepcion', p2),
       _sb.from('bib_documentos').select('num_hojas,tipo_impresion,forma_impresion,bib_solicitudes!inner(fecha_recepcion)')
         .gte('bib_solicitudes.fecha_recepcion', pa),
       _sb.from('bib_solicitudes').select('profesor,remitente_email,bib_documentos(num_hojas)')
-        .gte('fecha_recepcion', pa).eq('estado', 'entregado'),
-      _sb.from('bib_solicitudes').select('email_destino').gte('fecha_recepcion', pa)
+        .gte('fecha_recepcion', pa).eq('estado', 'entregado')
     ]);
+    const { data: destD } = await _sb.from('bib_solicitudes').select('email_destino').gte('fecha_recepcion', pa);
     function agg(rows) {
       let total=0,bn=0,color=0,una=0,doble=0;
       (rows||[]).forEach(d => {
