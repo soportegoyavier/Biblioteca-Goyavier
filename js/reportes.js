@@ -12,8 +12,7 @@ async function cargarReportes() {
         .gte('bib_solicitudes.fecha_recepcion', pa),
       _sb.from('bib_solicitudes').select('profesor,remitente_email,bib_documentos(num_hojas)')
         .gte('fecha_recepcion', pa).eq('estado', 'entregado'),
-      _sb.from('bib_solicitudes').select('email_destino')
-        .not('email_destino', 'is', null).neq('email_destino', '').gte('fecha_recepcion', pa)
+      _sb.from('bib_solicitudes').select('email_destino').gte('fecha_recepcion', pa)
     ]);
     function agg(rows) {
       let total=0,bn=0,color=0,una=0,doble=0;
@@ -39,6 +38,7 @@ async function cargarReportes() {
     const dests = {};
     (destD||[]).forEach(s => {
       const k = s.email_destino;
+      if (!k) return;
       dests[k] = (dests[k]||0) + 1;
     });
     const destArr = Object.entries(dests).sort((a,b)=>b[1]-a[1]).slice(0,8);
