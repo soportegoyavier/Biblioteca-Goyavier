@@ -18,6 +18,7 @@ _sb.auth.onAuthStateChange(async (_, session) => {
     actualizarMesLabel();
     cargarDashboard();
     initSingleSelect();
+    limpiarArchivosAntiguos();
   } else {
     document.getElementById('login-overlay').style.display = 'flex';
     document.getElementById('shell').style.display = 'none';
