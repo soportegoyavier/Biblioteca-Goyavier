@@ -78,7 +78,7 @@ async function cargarReportes() {
           <div class="rep-card-title">Top destinatarios · ${_hoy.getFullYear()} (envíos realizados)</div>
           ${destArr.length ? destArr.map(([email,cnt],i) => `
             <div class="rep-bar-row">
-              <span class="rep-bar-lbl" title="${email}">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 '+''}${shortEmail(email)}</span>
+              <span class="rep-bar-lbl" title="${email}">${i===0?'🥇 ':i===1?'🥈 ':i===2?'🥉 ':''}${shortEmail(email)}</span>
               <div class="rep-bar-bg"><div class="rep-bar-fill" style="width:${(cnt/maxDest*100).toFixed(0)}%;background:var(--accent)"></div></div>
               <span class="rep-bar-cnt">${cnt}</span>
             </div>`).join('') : '<p style="color:var(--dim);font-size:12px">Sin datos aún</p>'}
