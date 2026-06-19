@@ -61,17 +61,21 @@ function gasCall(accion, params = {}) {
 
 // ── VER ARCHIVO EN NUEVA PESTAÑA (blob URL fuerza renderizado inline) ─
 async function verArchivo(url, mime) {
+  // Abrir ventana SÍNCRONAMENTE dentro del handler de usuario.
+  // Si se abre dentro de un await, el navegador lo bloquea como popup.
+  const win = window.open('about:blank', '_blank');
+  if (!win) { toast('Permite ventanas emergentes para ver archivos', 'info'); return; }
   try {
     const res = await fetch(url);
-    if (!res.ok) throw new Error('Error al obtener el archivo');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const buf = await res.arrayBuffer();
-    const type = mime && mime !== 'application/octet-stream' ? mime : 'application/pdf';
+    const type = (mime && mime !== 'application/octet-stream') ? mime : 'application/pdf';
     const blob = new Blob([buf], { type });
     const blobUrl = URL.createObjectURL(blob);
-    const win = window.open(blobUrl, '_blank');
-    if (!win) toast('Permite ventanas emergentes para ver archivos', 'info');
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    win.location.href = blobUrl;
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
   } catch(e) {
+    win.close();
     toast('No se pudo abrir el archivo: ' + e.message, 'error');
   }
 }

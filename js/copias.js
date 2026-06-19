@@ -496,7 +496,7 @@ async function verDetalle(id) {
             <div class="adj-meta">${[tam,d.tipo_impresion,d.forma_impresion,d.num_hojas?d.num_hojas+' hojas':''].filter(Boolean).join(' · ')}</div>
           </div>
           <div class="adj-actions">
-            ${url ? `<button class="adj-btn view" onclick="verArchivo('${url}','${d.tipo_mime||'application/pdf'}')"><i class="fa fa-eye fa-sm"></i></button><a class="adj-btn dl" href="${url + '&download=' + encodeURIComponent(d.nombre_archivo)}" target="_blank"><i class="fa fa-download fa-sm"></i></a>`
+            ${url ? `<button class="adj-btn view" data-url="${escHtml(url)}" data-mime="${escHtml(d.tipo_mime||'application/pdf')}" onclick="verArchivo(this.dataset.url,this.dataset.mime)"><i class="fa fa-eye fa-sm"></i></button><a class="adj-btn dl" href="${escHtml(url)}&download=${encodeURIComponent(d.nombre_archivo||'archivo')}" target="_blank"><i class="fa fa-download fa-sm"></i></a>`
                   : '<span style="font-size:11px;color:var(--dim)">Sin archivo</span>'}
           </div>
         </div>`;
