@@ -109,7 +109,7 @@ async function cargarCaja() {
         ${lista.map(d=>`<div style="background:var(--s1);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <div style="font-size:13px;font-weight:600">${d.email}</div>
-            <div style="color:var(--red);font-weight:700;font-size:15px;font-family:'DM Serif Display',serif">${fmtPesos(d.total)}</div>
+            <div style="color:var(--red);font-weight:700;font-size:15px;font-family:'Poppins',sans-serif">${fmtPesos(d.total)}</div>
           </div>
           ${d.items.map(t=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:3px 0">
             <span>${t.nombre}</span>
