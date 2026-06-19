@@ -477,7 +477,7 @@ async function verDetalle(id) {
     const docs = data.bib_documentos || [];
     const urls = await Promise.all(docs.map(async d => {
       if (!d.storage_path) return null;
-      const { data: sd } = await _sb.storage.from('biblioteca-adjuntos').createSignedUrl(d.storage_path, 3600);
+      const { data: sd } = await _sb.storage.from('biblioteca-adjuntos').createSignedUrl(d.storage_path, 3600, { download: false });
       return sd?.signedUrl || null;
     }));
 
@@ -496,7 +496,7 @@ async function verDetalle(id) {
             <div class="adj-meta">${[tam,d.tipo_impresion,d.forma_impresion,d.num_hojas?d.num_hojas+' hojas':''].filter(Boolean).join(' · ')}</div>
           </div>
           <div class="adj-actions">
-            ${url ? `<a class="adj-btn view" href="${url}" target="_blank"><i class="fa fa-eye fa-sm"></i></a><a class="adj-btn dl" href="${url}" download="${d.nombre_archivo}"><i class="fa fa-download fa-sm"></i></a>`
+            ${url ? `<a class="adj-btn view" href="${url}" target="_blank" rel="noopener"><i class="fa fa-eye fa-sm"></i></a><a class="adj-btn dl" href="${url + '&download=' + encodeURIComponent(d.nombre_archivo)}" target="_blank"><i class="fa fa-download fa-sm"></i></a>`
                   : '<span style="font-size:11px;color:var(--dim)">Sin archivo</span>'}
           </div>
         </div>`;
