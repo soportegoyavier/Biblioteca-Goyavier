@@ -9,21 +9,20 @@ async function cargarDashboard() {
     // Queries separados — con timeout de 12s por si la red está lenta
     const [r1, r2, r3, r4] = await withTimeout(Promise.all([
       _sb.from('bib_solicitudes').select('id,estado').gte('fecha_recepcion', p1).lt('fecha_recepcion', p2),
-      _sb.from('bib_solicitudes').select('id,estado'),
+      _sb.from('bib_solicitudes').select('estado').in('estado', ['recibido','impreso']),
       _sb.from('bib_solicitudes').select('id,id_solicitud,fecha_recepcion,asunto,remitente_email,profesor,estado')
         .order('fecha_recepcion', { ascending: false }).limit(8),
       _sb.from('bib_documentos').select('solicitud_id,num_hojas')
     ]), 12000, 'Sin respuesta de la base de datos (12s). Verifica tu conexión a internet.');
 
     if (r1.error) throw new Error('solicitudes-mes: ' + r1.error.message);
-    if (r2.error) throw new Error('solicitudes-total: ' + r2.error.message);
+    if (r2.error) throw new Error('solicitudes-estado: ' + r2.error.message);
     if (r3.error) throw new Error('recientes: ' + r3.error.message);
 
-    const cnt = { pendiente:0, recibido:0, impreso:0, entregado:0 };
+    const cnt = { recibido:0, impreso:0 };
     (r2.data||[]).forEach(s => { if (cnt[s.estado] !== undefined) cnt[s.estado]++; });
 
-    const mesSolIds = new Set((r1.data||[]).filter(s => s.estado==='entregado').map(s => s.id));
-    const mesEnt    = mesSolIds.size;
+    const mesEnt = (r1.data||[]).filter(s => s.estado==='entregado').length;
 
     // Hojas del mes: solo docs de solicitudes del mes
     const mesSolAllIds = new Set((r1.data||[]).map(s => s.id));
@@ -35,10 +34,6 @@ async function cargarDashboard() {
     document.getElementById('st-entregar').textContent = cnt.impreso;
     document.getElementById('st-ent-mes').textContent  = mesEnt;
     document.getElementById('st-hojas').textContent    = mesHojas;
-    document.getElementById('p-pendiente').textContent = cnt.pendiente;
-    document.getElementById('p-recibido').textContent  = cnt.recibido;
-    document.getElementById('p-impreso').textContent   = cnt.impreso;
-    document.getElementById('p-entregado').textContent = cnt.entregado;
     _actualizarBadgeUI(cnt.recibido + cnt.impreso);
     renderRecientes(r3.data || []);
   } catch(e) {
