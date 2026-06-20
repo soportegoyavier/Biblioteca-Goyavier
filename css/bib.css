@@ -510,3 +510,15 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
 .picker-sel-email{font-size:11px;color:var(--accent);display:block;margin-top:3px;word-break:break-all}
 .picker-agregar-btn{background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px;transition:color .15s;margin-top:2px}
 .picker-agregar-btn:hover{color:var(--text)}
+
+/* ── MODAL IMPRESO — tarjetas de colaborador ──── */
+.dest-colab-card{border:1px solid var(--border2);border-radius:8px;overflow:hidden;background:var(--s2)}
+.dest-colab-hdr{display:flex;align-items:center;padding:10px 12px;cursor:pointer;user-select:none;transition:background .12s}
+.dest-colab-hdr:hover{background:var(--s3)}
+.dest-colab-body{border-top:1px solid var(--border2);padding:6px 0}
+.arch-row{padding:8px 14px;border-bottom:1px solid var(--border2)}
+.arch-row:last-child{border-bottom:none}
+.arch-row-on{background:var(--blue-bg)}
+.arch-check-lbl{display:flex;align-items:flex-start;gap:8px;cursor:pointer;width:100%}
+.arch-check-lbl input[type=checkbox]{flex-shrink:0;margin-top:2px;cursor:pointer}
+.arch-cfg{margin-top:10px;padding-top:8px;border-top:1px solid var(--border2)}
