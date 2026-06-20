@@ -128,29 +128,16 @@ async function marcarRecibido(id, btn) {
 
 // ── MODAL IMPRESO ─────────────────────────────────────────────
 async function abrirModalImpreso(id) {
-  _idImpreso = id;
-  _trabajosImpresion = [];
-  _archivosDisponibles = [];
-  _archivosAsignados = new Set();
-  _asuntoSolicitud = '';
-  resetSSDisplay();
-  // Cargar profesores desde Supabase si aún no están cargados
-  if (!Object.keys(_profesoresData).length) {
-    const { data: profs } = await _sb.from('bib_profesores').select('nombre,area').order('nombre');
-    if (profs && profs.length) {
-      _profesoresData = {};
-      profs.forEach(p => { _profesoresData[p.nombre] = { area: p.area || '' }; });
-    }
-  }
+  _idImpreso            = id;
+  _archivosDisponibles  = [];
   _impresoDestinatarios = [];
-  document.getElementById('mi-obs').value    = '';
-  document.getElementById('mi-nombre').value = '';
-  document.getElementById('mi-trab-section').style.display = 'none';
-  document.getElementById('mi-trab-list').innerHTML = '';
-  document.getElementById('mi-form-hdr').textContent = 'Trabajo de impresión';
-  document.getElementById('btn-conf-impreso').disabled = true;
-  document.getElementById('mi-id').textContent = 'Cargando...';
-  document.getElementById('mi-asunto').textContent = '';
+  _impresoExpanded      = new Set();
+  _asuntoSolicitud      = '';
+
+  document.getElementById('mi-nombre').value           = '';
+  document.getElementById('btn-conf-impreso').disabled  = true;
+  document.getElementById('mi-id').textContent          = 'Cargando...';
+  document.getElementById('mi-asunto').textContent      = '';
   document.getElementById('modal-impreso').classList.add('open');
   renderImpresoDestinatarios();
   try {
@@ -159,294 +146,232 @@ async function abrirModalImpreso(id) {
       .eq('id', id).single();
     if (error) throw error;
     _asuntoSolicitud = data.asunto || '';
-    _impresoDestinatarios = data.destinatarios || [];
-    document.getElementById('mi-id').textContent = data.id_solicitud || 'Sin ID';
-    document.getElementById('mi-asunto').textContent = _asuntoSolicitud;
-    document.getElementById('mi-nombre').value = _asuntoSolicitud;
+    _impresoDestinatarios = (data.destinatarios || []).map(d => ({
+      nombre:   typeof d === 'string' ? d : (d.nombre || d.email),
+      email:    typeof d === 'string' ? d : d.email,
+      archivos: []
+    }));
     _archivosDisponibles = data.bib_documentos || [];
-    renderArchivosConConfig();
+    document.getElementById('mi-id').textContent     = data.id_solicitud || 'Sin ID';
+    document.getElementById('mi-asunto').textContent = _asuntoSolicitud;
+    document.getElementById('mi-nombre').value       = _asuntoSolicitud;
     renderImpresoDestinatarios();
+    _updateConfirmarBtn();
   } catch(e) {
     document.getElementById('mi-id').textContent = 'Error';
     toast('Error: ' + e.message, 'error');
   }
 }
 
+// ── RENDER POR COLABORADOR ────────────────────────────────────
 function renderImpresoDestinatarios() {
   const list = document.getElementById('mi-dest-list');
   if (!list) return;
   if (!_impresoDestinatarios.length) {
-    list.innerHTML = '<span style="font-size:13px;color:var(--muted)">Sin destinatarios seleccionados</span>';
-    return;
+    list.innerHTML = '<div style="font-size:13px;color:var(--muted);padding:4px 0">Sin destinatarios — agrega un colaborador</div>';
+    _updateConfirmarBtn(); return;
   }
-  list.innerHTML = _impresoDestinatarios.map(d => {
-    const email = typeof d === 'string' ? d : d.email;
-    const nombre = typeof d === 'string' ? d : (d.nombre || d.email);
-    return `<div class="picker-sel-card">
+  const asignadosGlobal = new Set(
+    _impresoDestinatarios.flatMap(d => (d.archivos || []).map(a => a.doc_id))
+  );
+  list.innerHTML = _impresoDestinatarios.map((d, i) => _renderColabCard(d, i, asignadosGlobal)).join('');
+  _updateConfirmarBtn();
+}
+
+function _renderColabCard(d, idx, asignadosGlobal) {
+  const email      = d.email;
+  const nombre     = d.nombre || d.email;
+  const arch       = d.archivos || [];
+  const expanded   = _impresoExpanded.has(email);
+  const badge      = arch.length
+    ? `<span style="font-size:11px;color:var(--green);font-weight:600">${arch.length} archivo${arch.length>1?'s':''}</span>`
+    : `<span style="font-size:11px;color:var(--muted)">Sin archivos</span>`;
+  const disponibles = _archivosDisponibles.filter(f =>
+    !asignadosGlobal.has(f.id) || arch.some(a => a.doc_id === f.id)
+  );
+  return `<div class="dest-colab-card">
+    <div class="dest-colab-hdr" onclick="toggleImpresoExpand('${email.replace(/'/g,"\\'")}')">
       <div class="picker-sel-avatar"><i class="fa fa-user"></i></div>
-      <div class="picker-sel-info">
+      <div style="flex:1;min-width:0;margin-left:10px">
         <div class="picker-nombre">${escHtml(nombre)}</div>
-        <span class="picker-sel-email">${escHtml(email)}</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:2px">
+          <span class="picker-sel-email" style="display:inline">${escHtml(email)}</span>${badge}
+        </div>
       </div>
-      <button class="btn-cls" onclick="quitarImpresoDestinatario('${email.replace(/'/g,"\\'")}')" title="Quitar"><i class="fa fa-xmark fa-xs"></i></button>
-    </div>`;
-  }).join('');
+      <i class="fa fa-chevron-${expanded?'up':'down'} fa-sm" style="color:var(--muted);margin:0 8px;flex-shrink:0"></i>
+      <button class="btn-cls" onclick="event.stopPropagation();quitarImpresoDestinatario('${email.replace(/'/g,"\\'")}')"><i class="fa fa-xmark fa-xs"></i></button>
+    </div>
+    ${expanded ? `<div class="dest-colab-body">
+      ${!disponibles.length
+        ? '<div style="padding:12px 14px;font-size:13px;color:var(--muted)">Todos los archivos ya están asignados a otro colaborador</div>'
+        : disponibles.map(f => _renderArchivoRow(idx, f, arch)).join('')}
+    </div>` : ''}
+  </div>`;
+}
+
+function _renderArchivoRow(colabIdx, f, archivosAsig) {
+  const asig = archivosAsig.find(a => a.doc_id === f.id);
+  const ok   = !!asig;
+  const cfg  = asig || { copias:1, paginas:1, tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta' };
+  const sel  = (name, val, opt) => opt.map(o => `<option${cfg[name]===o?' selected':''}>${o}</option>`).join('');
+  return `<div class="arch-row${ok?' arch-row-on':''}">
+    <label class="arch-check-lbl" onclick="event.stopPropagation()">
+      <input type="checkbox" ${ok?'checked':''}
+        onchange="toggleArchivoColab(${colabIdx},${f.id},'${f.nombre_archivo.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}',this.checked)">
+      <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
+      <span style="flex:1;font-size:13px;word-break:break-all">${escHtml(f.nombre_archivo)}</span>
+    </label>
+    ${ok ? `<div class="arch-cfg">
+      <div class="fc-grid" style="margin-bottom:8px">
+        <div><div class="fc-label">Copias <span class="req">*</span></div>
+          <input type="number" class="fc" min="1" value="${cfg.copias}" style="margin:0"
+            oninput="updateArchivoConfig(${colabIdx},${f.id},'copias',+this.value||1)"></div>
+        <div><div class="fc-label">Páginas <span class="req">*</span></div>
+          <input type="number" class="fc" min="1" value="${cfg.paginas}" style="margin:0"
+            oninput="updateArchivoConfig(${colabIdx},${f.id},'paginas',+this.value||1)"></div>
+      </div>
+      <div class="fc-radios">
+        <div class="fc-radio-group">
+          <label class="fc-radio-lbl"><input type="radio" name="ftipo-${colabIdx}-${f.id}" value="Blanco y negro" ${cfg.tipo_impresion==='Blanco y negro'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tipo_impresion',this.value)"><i class="fa fa-droplet-slash fa-sm"></i> B&N</label>
+          <label class="fc-radio-lbl"><input type="radio" name="ftipo-${colabIdx}-${f.id}" value="Color" ${cfg.tipo_impresion==='Color'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tipo_impresion',this.value)"><i class="fa fa-droplet fa-sm" style="color:#4c8eed"></i> Color</label>
+        </div>
+        <div class="fc-radio-group">
+          <label class="fc-radio-lbl"><input type="radio" name="fmodo-${colabIdx}-${f.id}" value="Una cara" ${cfg.modo_impresion==='Una cara'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'modo_impresion',this.value)"><i class="fa fa-file fa-sm"></i> Una cara</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fmodo-${colabIdx}-${f.id}" value="Doble cara" ${cfg.modo_impresion==='Doble cara'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'modo_impresion',this.value)"><i class="fa fa-copy fa-sm"></i> Doble cara</label>
+        </div>
+        <div class="fc-radio-group">
+          <label class="fc-radio-lbl"><input type="radio" name="fhoja-${colabIdx}-${f.id}" value="Carta" ${cfg.tamano_hoja==='Carta'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tamano_hoja',this.value)"> Carta</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fhoja-${colabIdx}-${f.id}" value="Oficio" ${cfg.tamano_hoja==='Oficio'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tamano_hoja',this.value)"> Oficio</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fhoja-${colabIdx}-${f.id}" value="Doble Carta" ${cfg.tamano_hoja==='Doble Carta'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tamano_hoja',this.value)"> Doble Carta</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fhoja-${colabIdx}-${f.id}" value="A4" ${cfg.tamano_hoja==='A4'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tamano_hoja',this.value)"> A4</label>
+        </div>
+      </div>
+    </div>` : ''}
+  </div>`;
+}
+
+function toggleImpresoExpand(email) {
+  _impresoExpanded.has(email) ? _impresoExpanded.delete(email) : _impresoExpanded.add(email);
+  renderImpresoDestinatarios();
+}
+
+function toggleArchivoColab(colabIdx, docId, nombre, checked) {
+  const d = _impresoDestinatarios[colabIdx];
+  if (!d) return;
+  if (checked) {
+    if (!d.archivos.find(a => a.doc_id === docId))
+      d.archivos.push({ doc_id: docId, nombre, copias:1, paginas:1,
+        tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta', total_hojas:1 });
+  } else {
+    d.archivos = d.archivos.filter(a => a.doc_id !== docId);
+  }
+  _impresoExpanded.add(d.email);
+  renderImpresoDestinatarios();
+}
+
+function updateArchivoConfig(colabIdx, docId, field, value) {
+  const d = _impresoDestinatarios[colabIdx];
+  if (!d) return;
+  const a = d.archivos.find(a => a.doc_id === docId);
+  if (!a) return;
+  a[field] = value;
+  a.total_hojas = a.modo_impresion === 'Doble cara'
+    ? a.copias * Math.ceil(a.paginas / 2)
+    : a.copias * a.paginas;
+  _updateConfirmarBtn();
 }
 
 function quitarImpresoDestinatario(email) {
-  _impresoDestinatarios = _impresoDestinatarios.filter(d => {
-    const e = typeof d === 'string' ? d : d.email;
-    return e !== email;
-  });
+  _impresoDestinatarios = _impresoDestinatarios.filter(d => d.email !== email);
+  _impresoExpanded.delete(email);
   renderImpresoDestinatarios();
 }
 
 function abrirPickerParaImpreso() {
   abrirPickerDestinatarios(
     (destinatarios) => {
-      _impresoDestinatarios = destinatarios;
+      const existing = new Map(_impresoDestinatarios.map(d => [d.email, d]));
+      _impresoDestinatarios = destinatarios.map(d => ({
+        nombre:   d.nombre || d.email,
+        email:    d.email,
+        archivos: existing.get(d.email)?.archivos || []
+      }));
       renderImpresoDestinatarios();
     },
     null,
-    _impresoDestinatarios
+    _impresoDestinatarios.map(d => ({ nombre: d.nombre, email: d.email }))
   );
 }
 
-function renderArchivosConConfig() {
-  const list    = document.getElementById('mi-arch-list');
-  const counter = document.getElementById('mi-arch-counter');
-  const elPend  = document.getElementById('mi-arch-pending');
-  const elTotal = document.getElementById('mi-arch-total');
-
-  if (!_archivosDisponibles.length) {
-    list.innerHTML = '<span style="color:var(--muted);font-size:13px">Sin archivos registrados en esta solicitud</span>';
-    if (counter) counter.style.display = 'none';
-    return;
-  }
-
-  const pendientes = _archivosDisponibles.filter(f => !_archivosAsignados.has(String(f.id))).length;
-  if (counter) counter.style.display = '';
-  if (elPend)  elPend.textContent  = pendientes;
-  if (elTotal) elTotal.textContent = _archivosDisponibles.length;
-
-  const todosInst   = _archivosDisponibles.every(f => _archivosAsignados.has(String(f.id)));
-  const btnInst     = document.getElementById('btn-agregar-inst');
-  const msgInst     = document.getElementById('msg-todos-inst');
-  if (btnInst) { btnInst.disabled = todosInst; btnInst.style.opacity = todosInst ? '0.45' : ''; }
-  if (msgInst) { msgInst.style.display = todosInst ? '' : 'none'; }
-
-  list.innerHTML = _archivosDisponibles.map(f => {
-    const fid      = String(f.id);
-    const asignado = _archivosAsignados.has(fid);
-    if (asignado) {
-      return `<div class="file-item" id="fi-${fid}">
-        <div class="file-check-row file-assigned">
-          <i class="fa fa-file-lines fa-sm" style="color:var(--muted)"></i>
-          <span>${escHtml(f.nombre_archivo)}</span>
-          <span class="file-assigned-badge"><i class="fa fa-check fa-sm"></i> Asignado</span>
-        </div>
-      </div>`;
-    }
-    return `<div class="file-item" id="fi-${fid}">
-      <label class="file-check-row" for="fchk-${fid}">
-        <input type="checkbox" id="fchk-${fid}" value="${fid}" data-name="${escHtml(f.nombre_archivo)}"
-               onchange="toggleArchivoCheck('${fid}')">
-        <i class="fa fa-file-lines fa-sm" style="color:var(--muted)"></i>
-        <span>${escHtml(f.nombre_archivo)}</span>
-      </label>
-      <div class="file-config" id="fconf-${fid}">
-        <div class="fc-grid">
-          <div>
-            <div class="fc-label">Copias <span class="req">*</span></div>
-            <input type="number" class="fc" id="fcopias-${fid}" min="1" value="1" style="margin:0">
-          </div>
-          <div>
-            <div class="fc-label">Páginas <span class="req">*</span></div>
-            <input type="number" class="fc" id="fpaginas-${fid}" min="1" value="1" style="margin:0">
-          </div>
-        </div>
-        <div class="fc-radios">
-          <div class="fc-radio-group">
-            <label class="fc-radio-lbl"><input type="radio" name="ftipo-${fid}" value="Blanco y negro"><i class="fa fa-droplet-slash fa-sm"></i> B&N</label>
-            <label class="fc-radio-lbl"><input type="radio" name="ftipo-${fid}" value="Color"><i class="fa fa-droplet fa-sm" style="color:#4c8eed"></i> Color</label>
-          </div>
-          <div class="fc-radio-group">
-            <label class="fc-radio-lbl"><input type="radio" name="fmodo-${fid}" value="Una cara"><i class="fa fa-file fa-sm"></i> Una cara</label>
-            <label class="fc-radio-lbl"><input type="radio" name="fmodo-${fid}" value="Doble cara"><i class="fa fa-copy fa-sm"></i> Doble cara</label>
-          </div>
-          <div class="fc-radio-group">
-            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="Carta"> Carta</label>
-            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="Oficio"> Oficio</label>
-            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="Doble Carta"> Doble Carta</label>
-            <label class="fc-radio-lbl"><input type="radio" name="fhoja-${fid}" value="A4"> A4</label>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function toggleArchivoCheck(fid) {
-  const chk  = document.getElementById('fchk-' + fid);
-  const conf = document.getElementById('fconf-' + fid);
-  if (conf) conf.classList.toggle('open', chk.checked);
-}
-
-function agregarTrabajo() {
-  const nombre = document.getElementById('mi-nombre').value.trim();
-  const obs    = document.getElementById('mi-obs').value.trim();
-
-  if (!nombre) { toast('Indica el nombre del trabajo', 'error'); document.getElementById('mi-nombre').focus(); return; }
-  if (!_profSeleccionado) { toast('Selecciona el profesor destinatario', 'error'); toggleSSDropdown(); return; }
-
-  const checks = [...document.querySelectorAll('#mi-arch-list input[type=checkbox]:checked')];
-  if (!checks.length && _archivosDisponibles.length > 0) {
-    toast('Selecciona al menos un archivo del correo', 'error'); return;
-  }
-
-  const archivos = [];
-  for (const chk of checks) {
-    const fid    = chk.value;
-    const nom    = chk.dataset.name;
-    const copias = parseInt((document.getElementById('fcopias-'  + fid) || {}).value) || 0;
-    const pags   = parseInt((document.getElementById('fpaginas-' + fid) || {}).value) || 0;
-    const tipo   = (document.querySelector(`input[name="ftipo-${fid}"]:checked`) || {}).value || '';
-    const modo   = (document.querySelector(`input[name="fmodo-${fid}"]:checked`) || {}).value || '';
-    const hoja   = (document.querySelector(`input[name="fhoja-${fid}"]:checked`) || {}).value || '';
-
-    if (copias < 1) { toast(`"${nom}": copias debe ser ≥ 1`, 'error'); return; }
-    if (pags   < 1) { toast(`"${nom}": páginas debe ser ≥ 1`, 'error'); return; }
-    if (!tipo)      { toast(`"${nom}": selecciona B&N o Color`, 'error'); return; }
-    if (!modo)      { toast(`"${nom}": selecciona Una o Doble cara`, 'error'); return; }
-    if (!hoja)      { toast(`"${nom}": selecciona el tamaño de hoja`, 'error'); return; }
-
-    const hojas = modo === 'Doble cara' ? copias * Math.ceil(pags / 2) : copias * pags;
-    archivos.push({ doc_id: parseInt(fid), nombre: nom, copias, paginas: pags, tipo_impresion: tipo, modo_impresion: modo, tamano_hoja: hoja, total_hojas: hojas });
-    _archivosAsignados.add(fid);
-  }
-
-  const totalHojas = archivos.reduce((a, f) => a + f.total_hojas, 0);
-  const nombreAnterior = nombre;
-  _trabajosImpresion.push({ nombre, profesor: _profSeleccionado, archivos, total_hojas: totalHojas, observaciones: obs || null });
-
-  renderTrabajosCards();
-  document.getElementById('btn-conf-impreso').disabled = false;
-
-  _profSeleccionado = null;
-  resetSSDisplay();
-  document.getElementById('mi-nombre').value = _asuntoSolicitud;
-  document.getElementById('mi-obs').value = '';
-  document.getElementById('mi-form-hdr').textContent = 'Agregar otro trabajo (opcional)';
-  renderArchivosConConfig();
-  toast(`Trabajo "${nombreAnterior}" agregado`, 'success');
-}
-
-function renderTrabajosCards() {
-  const section = document.getElementById('mi-trab-section');
-  const list    = document.getElementById('mi-trab-list');
-  const count   = document.getElementById('mi-trab-count');
-  section.style.display = _trabajosImpresion.length ? '' : 'none';
-  count.textContent = _trabajosImpresion.length + ' trabajo' + (_trabajosImpresion.length !== 1 ? 's' : '');
-  list.innerHTML = _trabajosImpresion.map((t, i) => {
-    const archLines = (t.archivos || []).map(a =>
-      `<div style="display:flex;align-items:baseline;gap:6px;margin-top:3px;font-size:12px">
-        <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
-        <span>${escHtml(a.nombre)}</span>
-        <span style="color:var(--muted);white-space:nowrap">${a.copias}c × ${a.paginas}p — ${escHtml(a.tipo_impresion)} — ${escHtml(a.modo_impresion)}${a.tamano_hoja ? ' — ' + escHtml(a.tamano_hoja) : ''}</span>
-      </div>`
-    ).join('');
-    return `<div class="trab-card">
-      <div class="trab-body">
-        <div class="trab-name">${escHtml(t.nombre)}</div>
-        <div class="trab-profs"><i class="fa fa-user-tie fa-sm"></i> ${escHtml(t.profesor)}</div>
-        ${archLines || '<div style="font-size:12px;color:var(--muted)">Sin archivos asignados</div>'}
-        <div class="trab-meta" style="margin-top:5px"><strong>${t.total_hojas} hoja${t.total_hojas !== 1 ? 's' : ''}</strong>${t.observaciones ? ` — <em>${escHtml(t.observaciones)}</em>` : ''}</div>
-      </div>
-      <button class="trab-del" onclick="eliminarTrabajo(${i})" title="Quitar"><i class="fa fa-trash-can fa-sm"></i></button>
-    </div>`;
-  }).join('');
-}
-
-function eliminarTrabajo(i) {
-  const trabajo = _trabajosImpresion[i];
-  (trabajo.archivos || []).forEach(a => {
-    const f = _archivosDisponibles.find(d => d.nombre_archivo === a.nombre);
-    if (f) _archivosAsignados.delete(String(f.id));
-  });
-  _trabajosImpresion.splice(i, 1);
-  renderTrabajosCards();
-  renderArchivosConConfig();
-  if (!_trabajosImpresion.length) {
-    document.getElementById('btn-conf-impreso').disabled = true;
-    document.getElementById('mi-form-hdr').textContent = 'Trabajo de impresión';
-  }
+function _updateConfirmarBtn() {
+  const btn = document.getElementById('btn-conf-impreso');
+  if (!btn) return;
+  const hasName  = (document.getElementById('mi-nombre')?.value || '').trim().length > 0;
+  const hasFiles = _impresoDestinatarios.some(d => (d.archivos || []).length > 0);
+  btn.disabled = !(hasName && hasFiles);
 }
 
 async function confirmarImpreso() {
-  if (!_idImpreso || !_trabajosImpresion.length) return;
+  const nombre = (document.getElementById('mi-nombre')?.value || '').trim();
+  if (!nombre) { toast('Indica el nombre del trabajo', 'error'); document.getElementById('mi-nombre').focus(); return; }
+  const colabsConArch = _impresoDestinatarios.filter(d => (d.archivos || []).length > 0);
+  if (!colabsConArch.length) { toast('Asigna archivos a al menos un colaborador', 'error'); return; }
+
   const btn = document.getElementById('btn-conf-impreso');
   btn.classList.add('loading'); btn.disabled = true;
   try {
-    const rows = _trabajosImpresion.map(t => ({ solicitud_id: _idImpreso, ...t }));
+    const calcHojas = a => a.modo_impresion === 'Doble cara'
+      ? a.copias * Math.ceil(a.paginas / 2)
+      : a.copias * a.paginas;
+
+    const rows = colabsConArch.map(d => {
+      const archivos = d.archivos.map(a => ({
+        doc_id: a.doc_id, nombre: a.nombre, copias: a.copias, paginas: a.paginas,
+        tipo_impresion: a.tipo_impresion, modo_impresion: a.modo_impresion,
+        tamano_hoja: a.tamano_hoja, total_hojas: calcHojas(a)
+      }));
+      return { solicitud_id: _idImpreso, nombre, profesor: d.nombre,
+        archivos, total_hojas: archivos.reduce((s, a) => s + a.total_hojas, 0), observaciones: null };
+    });
+
     const { error: errT } = await _sb.from('bib_trabajos_impresion').insert(rows);
     if (errT) throw errT;
 
-    // Actualizar bib_documentos con la config real de impresión
-    const docUpdates = [];
-    for (const t of _trabajosImpresion) {
-      for (const a of (t.archivos || [])) {
-        if (a.doc_id) {
-          docUpdates.push(
-            _sb.from('bib_documentos')
-              .update({ num_hojas: a.total_hojas, tipo_impresion: a.tipo_impresion, forma_impresion: a.modo_impresion })
-              .eq('id', a.doc_id)
-          );
-        }
-      }
-    }
+    const docUpdates = colabsConArch.flatMap(d =>
+      d.archivos.map(a => _sb.from('bib_documentos').update({
+        num_hojas: calcHojas(a), tipo_impresion: a.tipo_impresion, forma_impresion: a.modo_impresion
+      }).eq('id', a.doc_id))
+    );
     if (docUpdates.length) await Promise.all(docUpdates);
 
-    const ahora = new Date().toISOString();
-    const primerProf = _trabajosImpresion[0]?.profesor || null;
-    const pdProf     = primerProf ? (_profesoresData[primerProf] || {}) : {};
+    const ahora       = new Date().toISOString();
+    const destGuardar = _impresoDestinatarios.map(d => ({ nombre: d.nombre, email: d.email }));
+
     const { data: sol, error } = await _sb.from('bib_solicitudes')
-      .update({
-        estado: 'impreso',
-        notif_impreso_en: ahora,
-        profesor: primerProf,
-        area:     pdProf.area || null
-      })
+      .update({ estado:'impreso', notif_impreso_en: ahora,
+        profesor: colabsConArch[0]?.nombre || null, area: null, destinatarios: destGuardar })
       .eq('id', _idImpreso)
-      .select('id_solicitud,asunto,profesor,materia,destinatarios').single();
+      .select('id_solicitud,asunto,profesor,materia').single();
     if (error) throw error;
 
     await _sb.from('bib_historial_estados').insert({
-      solicitud_id: _idImpreso, estado_anterior: 'recibido', estado_nuevo: 'impreso'
+      solicitud_id: _idImpreso, estado_anterior:'recibido', estado_nuevo:'impreso'
     });
 
-    const totalHojas = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
-
-    // Guardar destinatarios actualizados (puede haberlos editado en el modal)
-    await _sb.from('bib_solicitudes').update({ destinatarios: _impresoDestinatarios }).eq('id', _idImpreso);
-
-    if (_impresoDestinatarios.length) {
-      for (const dest of _impresoDestinatarios) {
-        const email = typeof dest === 'string' ? dest : dest.email;
-        const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idImpreso });
-        gasCall('enviarCorreo', {
-          tipo: 'impreso', destinatario: email,
-          numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
-          asunto: sol.asunto, profesor: sol.profesor,
-          materia: sol.materia, numHojas: totalHojas
-        }).catch(() => {});
-      }
+    const totalHojas = rows.reduce((s, r) => s + r.total_hojas, 0);
+    for (const dest of destGuardar) {
+      const { data: numP } = await _sb.rpc('get_num_solicitud_para_email',
+        { p_email: dest.email, p_solicitud_id: _idImpreso });
+      gasCall('enviarCorreo', { tipo:'impreso', destinatario: dest.email,
+        numPersonal: numP||1, idSolicitud: sol.id_solicitud,
+        asunto: sol.asunto, profesor: sol.profesor,
+        materia: sol.materia, numHojas: totalHojas }).catch(()=>{});
     }
 
     toast('Impresión registrada. Correo enviado.', 'success');
     cerrarModal('modal-impreso');
     await cargarSolicitudes();
     await actualizarBadges();
-
   } catch(e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.classList.remove('loading'); btn.disabled = false; }
 }

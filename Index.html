@@ -287,70 +287,16 @@
     </div>
     <div class="mb" style="max-height:72vh;overflow-y:auto">
 
-      <!-- Trabajos ya registrados -->
-      <div id="mi-trab-section" style="display:none">
-        <div class="msec-hdr" style="display:flex;justify-content:space-between;align-items:center">
-          Trabajos registrados
-          <span id="mi-trab-count" style="color:var(--accent);font-weight:700;letter-spacing:0"></span>
-        </div>
-        <div id="mi-trab-list" class="trab-list"></div>
-      </div>
-
-      <div class="msec-hdr" id="mi-form-hdr">Trabajo de impresión</div>
-
+      <div class="msec-hdr">Trabajo de impresión</div>
       <div class="fgroup">
         <label>Nombre del trabajo <span class="req">*</span></label>
-        <input type="text" id="mi-nombre" class="fc" placeholder="Ej: Evaluaciones Lenguaje Grado 8">
+        <input type="text" id="mi-nombre" class="fc" placeholder="Ej: Evaluaciones Lenguaje Grado 8" oninput="_updateConfirmarBtn()">
       </div>
 
-      <div class="fgroup">
-        <label>Profesor destinatario <span class="req">*</span></label>
-        <div class="ss-wrap" id="ss-wrap">
-          <div class="ss-trigger" id="ss-trigger" onclick="toggleSSDropdown()">
-            <span id="ss-display" class="ss-placeholder">Buscar o seleccionar...</span>
-            <i class="fa fa-chevron-down ss-ico" id="ss-ico"></i>
-          </div>
-          <div class="ss-panel" id="ss-panel">
-            <div class="ss-search-wrap">
-              <input type="text" id="ss-search" placeholder="Escribir para filtrar..."
-                     autocomplete="off" oninput="renderSSOptions(this.value)">
-            </div>
-            <div class="ss-list" id="ss-list"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="fgroup" id="mi-arch-group">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <label style="margin:0">Archivos del correo</label>
-          <span id="mi-arch-counter" style="font-size:12px;color:var(--muted);display:none">
-            <span id="mi-arch-pending" style="font-weight:700;color:var(--accent)">0</span>
-            de <span id="mi-arch-total">0</span> pendientes
-          </span>
-        </div>
-        <div id="mi-arch-list">
-          <span style="color:var(--muted);font-size:13px">Sin archivos registrados</span>
-        </div>
-      </div>
-
-      <div class="fgroup">
-        <label>Observaciones</label>
-        <textarea id="mi-obs" class="fc" rows="2" placeholder="Notas adicionales (opcional)"></textarea>
-      </div>
-
-      <button id="btn-agregar-inst" class="btn btn-ghost" style="width:100%;margin-top:4px" onclick="agregarTrabajo()">
-        <i class="fa fa-plus fa-sm"></i> Agregar trabajo
-      </button>
-      <p id="msg-todos-inst" style="display:none;margin:8px 0 0;font-size:12px;color:var(--muted);text-align:center;line-height:1.5">
-        <i class="fa fa-circle-check fa-sm" style="color:var(--green)"></i>
-        Todos los archivos de esta solicitud ya están asignados a trabajos.
-      </p>
-
-      <!-- Destinatarios de notificación -->
-      <div class="fgroup" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
-        <label style="margin-bottom:8px">Notificar a</label>
-        <div id="mi-dest-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
-        <button class="btn btn-ghost" style="width:100%" onclick="abrirPickerParaImpreso()">
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <div class="msec-lbl">Notificar a</div>
+        <div id="mi-dest-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="abrirPickerParaImpreso()">
           <i class="fa fa-user-plus fa-sm"></i> Agregar colaborador
         </button>
       </div>
