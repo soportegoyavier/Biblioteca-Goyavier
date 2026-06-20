@@ -96,6 +96,10 @@ function renderCards(rows) {
 // ── MARCAR RECIBIDO ───────────────────────────────────────────
 async function marcarRecibido(id, btn) {
   btn.classList.add('loading'); btn.disabled = true;
+  // Pre-seleccionar el remitente si coincide con un colaborador registrado
+  const { data: preSol } = await _sb.from('bib_solicitudes')
+    .select('remitente_email').eq('id', id).single();
+  const preSelected = preSol?.remitente_email ? [{ email: preSol.remitente_email }] : [];
   await abrirPickerDestinatarios(
     async (destinatarios) => {
       try {
@@ -119,7 +123,8 @@ async function marcarRecibido(id, btn) {
         btn.classList.remove('loading'); btn.disabled = false;
       }
     },
-    () => { btn.classList.remove('loading'); btn.disabled = false; }
+    () => { btn.classList.remove('loading'); btn.disabled = false; },
+    preSelected
   );
 }
 
