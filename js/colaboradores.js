@@ -1,12 +1,13 @@
 // ── COLABORADORES — Admin CRUD + Picker de destinatarios ──────
 
 // ── ESTADO LOCAL ─────────────────────────────────────────────
-let _colabs        = [];
-let _editColabId   = null;
-let _pickerColabs  = [];       // caché para el picker
-let _pickerSel     = new Set();// emails seleccionados
-let _pickerConfirm = null;     // callback onConfirm(destinatarios[])
-let _pickerCancel  = null;     // callback onCancel()
+let _colabs         = [];
+let _editColabId    = null;
+let _pickerColabs   = [];        // caché para el picker
+let _pickerSel      = new Set(); // emails seleccionados
+let _pickerConfirm  = null;      // callback onConfirm(destinatarios[])
+let _pickerCancel   = null;      // callback onCancel()
+let _pickerExtraOpen = false;    // sección "agregar otro" expandida
 
 // ── ADMIN: CARGAR Y RENDERIZAR ────────────────────────────────
 async function cargarColaboradores() {
@@ -173,17 +174,15 @@ async function guardarColaborador() {
 // Uso: abrirPickerDestinatarios(onConfirm, onCancel, preSelected)
 //   onConfirm(destinatarios) → array de {nombre, email}
 //   onCancel()               → usuario cerró sin confirmar
-//   preSelected              → array de {email} ya marcados
+//   preSelected              → array de {email} ya marcados (pre-selección automática)
 async function abrirPickerDestinatarios(onConfirm, onCancel, preSelected = []) {
-  _pickerConfirm = onConfirm;
-  _pickerCancel  = onCancel;
-  _pickerSel     = new Set(preSelected.map(d => typeof d === 'string' ? d : d.email));
+  _pickerConfirm  = onConfirm;
+  _pickerCancel   = onCancel;
+  _pickerExtraOpen = false;
 
-  document.getElementById('picker-search').value = '';
-  _renderPickerChips();
-  document.getElementById('modal-destinatarios').classList.add('open');
   document.getElementById('picker-list').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
-  setTimeout(() => document.getElementById('picker-search')?.focus(), 80);
+  document.getElementById('modal-destinatarios').classList.add('open');
+  document.getElementById('picker-sel-section').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
 
   if (!_pickerColabs.length) {
     const { data, error } = await _sb
@@ -193,13 +192,80 @@ async function abrirPickerDestinatarios(onConfirm, onCancel, preSelected = []) {
       .order('area').order('nombre');
     if (!error) _pickerColabs = data || [];
   }
+
+  // Inicializar selección: resolver emails desde pre-selección
+  _pickerSel = new Set();
+  preSelected.forEach(p => {
+    const email = typeof p === 'string' ? p : p.email;
+    // buscar en colabs para seleccionar su email exacto
+    const found = _pickerColabs.find(c =>
+      (c.bib_colaboradores_correos || []).some(ce => ce.email === email)
+    );
+    if (found) {
+      _pickerSel.add(email);
+    }
+    // si no está en colabs (email externo) igual pre-seleccionar
+    else if (email) _pickerSel.add(email);
+  });
+
+  // Si no hay pre-selección, abrir directo la lista de búsqueda
+  if (_pickerSel.size === 0) _pickerExtraOpen = true;
+
+  document.getElementById('picker-search').value = '';
+  _renderPickerSelSection();
+  _applyPickerExtraState();
   _renderPickerList('');
+  if (_pickerExtraOpen) setTimeout(() => document.getElementById('picker-search')?.focus(), 80);
 }
 
 function cerrarPickerModal() {
   cerrarModal('modal-destinatarios');
   if (_pickerCancel) { _pickerCancel(); _pickerCancel = null; }
   _pickerConfirm = null;
+}
+
+// ── SECCIÓN SELECCIONADOS PROMINENTE ──────────────────────────
+function _renderPickerSelSection() {
+  const sec     = document.getElementById('picker-sel-section');
+  const countEl = document.getElementById('picker-count');
+  if (countEl) countEl.textContent = _pickerSel.size > 0 ? `(${_pickerSel.size})` : '';
+  if (!sec) return;
+
+  if (_pickerSel.size === 0) {
+    sec.innerHTML = '<div class="picker-empty-msg" style="margin-bottom:8px">Sin destinatarios — el correo no se enviará</div>';
+    return;
+  }
+
+  const cards = [];
+  _pickerColabs.forEach(c => {
+    const emails    = (c.bib_colaboradores_correos || []).map(e => e.email);
+    const selEmails = emails.filter(e => _pickerSel.has(e));
+    if (!selEmails.length) return;
+    cards.push(`<div class="picker-sel-card">
+      <div class="picker-sel-avatar"><i class="fa fa-user"></i></div>
+      <div class="picker-sel-info">
+        <div class="picker-nombre">${escHtml(c.nombre)}</div>
+        <div class="picker-cargo">${escHtml([c.cargo, c.area].filter(Boolean).join(' · '))}</div>
+        ${selEmails.map(e => `<span class="picker-sel-email">${escHtml(e)}</span>`).join('')}
+      </div>
+      <button class="btn-cls" onclick="toggleColabPicker(${c.id})" title="Quitar"><i class="fa fa-xmark fa-xs"></i></button>
+    </div>`);
+  });
+  sec.innerHTML = cards.length ? cards.join('') : '<div class="picker-empty-msg" style="margin-bottom:8px">Sin destinatarios seleccionados</div>';
+}
+
+// ── TOGGLE SECCIÓN EXTRA ───────────────────────────────────────
+function togglePickerExtra() {
+  _pickerExtraOpen = !_pickerExtraOpen;
+  _applyPickerExtraState();
+  if (_pickerExtraOpen) setTimeout(() => document.getElementById('picker-search')?.focus(), 80);
+}
+
+function _applyPickerExtraState() {
+  const content = document.getElementById('picker-extra-content');
+  const ico     = document.getElementById('picker-agregar-ico');
+  if (content) content.style.display = _pickerExtraOpen ? '' : 'none';
+  if (ico)     ico.className = _pickerExtraOpen ? 'fa fa-minus fa-xs' : 'fa fa-plus fa-xs';
 }
 
 function _renderPickerList(q) {
@@ -253,31 +319,14 @@ function toggleColabPicker(colabId) {
   const emails = (c.bib_colaboradores_correos||[]).map(e => e.email);
   const all = emails.length > 0 && emails.every(e => _pickerSel.has(e));
   emails.forEach(e => { all ? _pickerSel.delete(e) : _pickerSel.add(e); });
-  _renderPickerChips();
+  _renderPickerSelSection();
   _renderPickerList(document.getElementById('picker-search')?.value || '');
 }
 
 function toggleEmailPicker(email, on) {
   on ? _pickerSel.add(email) : _pickerSel.delete(email);
-  _renderPickerChips();
+  _renderPickerSelSection();
   _renderPickerList(document.getElementById('picker-search')?.value || '');
-}
-
-function _renderPickerChips() {
-  const n = _pickerSel.size;
-  const cntEl = document.getElementById('picker-count');
-  if (cntEl) cntEl.textContent = n;
-  const chips = document.getElementById('picker-chips');
-  if (!chips) return;
-  if (n === 0) {
-    chips.innerHTML = '<span class="picker-empty-msg">Sin destinatarios — el correo no se enviará</span>';
-  } else {
-    chips.innerHTML = [..._pickerSel].map(e =>
-      `<span class="picker-chip">${escHtml(e)}
-        <button onclick="toggleEmailPicker('${e.replace(/'/g,"\\'")}',false)" style="background:none;border:none;cursor:pointer;margin-left:3px;color:inherit;padding:0;line-height:1"><i class="fa fa-xmark fa-xs"></i></button>
-      </span>`
-    ).join('');
-  }
 }
 
 function pickerSearchDebounce() {
