@@ -7,10 +7,11 @@ let _idEntrega = null;
 let _trabajosImpresion = [];
 let _archivosDisponibles = [];
 let _archivosAsignados = new Set();
-let _profSeleccionado = null;
-let _profArea         = null;
-let _profesoresData   = {}; // nombre → { area }
-let _asuntoSolicitud = '';
+let _profSeleccionado    = null;
+let _profArea            = null;
+let _profesoresData      = {}; // nombre → { area }
+let _asuntoSolicitud     = '';
+let _impresoDestinatarios = []; // destinatarios visibles en el modal de impresión
 
 let _mes = _hoy.getMonth();
 let _ano = _hoy.getFullYear();

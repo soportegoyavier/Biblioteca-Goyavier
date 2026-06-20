@@ -142,6 +142,7 @@ async function abrirModalImpreso(id) {
       profs.forEach(p => { _profesoresData[p.nombre] = { area: p.area || '' }; });
     }
   }
+  _impresoDestinatarios = [];
   document.getElementById('mi-obs').value    = '';
   document.getElementById('mi-nombre').value = '';
   document.getElementById('mi-trab-section').style.display = 'none';
@@ -151,21 +152,64 @@ async function abrirModalImpreso(id) {
   document.getElementById('mi-id').textContent = 'Cargando...';
   document.getElementById('mi-asunto').textContent = '';
   document.getElementById('modal-impreso').classList.add('open');
+  renderImpresoDestinatarios();
   try {
     const { data, error } = await _sb.from('bib_solicitudes')
-      .select('id_solicitud,asunto,bib_documentos(id,nombre_archivo)')
+      .select('id_solicitud,asunto,destinatarios,bib_documentos(id,nombre_archivo)')
       .eq('id', id).single();
     if (error) throw error;
     _asuntoSolicitud = data.asunto || '';
+    _impresoDestinatarios = data.destinatarios || [];
     document.getElementById('mi-id').textContent = data.id_solicitud || 'Sin ID';
     document.getElementById('mi-asunto').textContent = _asuntoSolicitud;
     document.getElementById('mi-nombre').value = _asuntoSolicitud;
     _archivosDisponibles = data.bib_documentos || [];
     renderArchivosConConfig();
+    renderImpresoDestinatarios();
   } catch(e) {
     document.getElementById('mi-id').textContent = 'Error';
     toast('Error: ' + e.message, 'error');
   }
+}
+
+function renderImpresoDestinatarios() {
+  const list = document.getElementById('mi-dest-list');
+  if (!list) return;
+  if (!_impresoDestinatarios.length) {
+    list.innerHTML = '<span style="font-size:13px;color:var(--muted)">Sin destinatarios seleccionados</span>';
+    return;
+  }
+  list.innerHTML = _impresoDestinatarios.map(d => {
+    const email = typeof d === 'string' ? d : d.email;
+    const nombre = typeof d === 'string' ? d : (d.nombre || d.email);
+    return `<div class="picker-sel-card">
+      <div class="picker-sel-avatar"><i class="fa fa-user"></i></div>
+      <div class="picker-sel-info">
+        <div class="picker-nombre">${escHtml(nombre)}</div>
+        <span class="picker-sel-email">${escHtml(email)}</span>
+      </div>
+      <button class="btn-cls" onclick="quitarImpresoDestinatario('${email.replace(/'/g,"\\'")}')" title="Quitar"><i class="fa fa-xmark fa-xs"></i></button>
+    </div>`;
+  }).join('');
+}
+
+function quitarImpresoDestinatario(email) {
+  _impresoDestinatarios = _impresoDestinatarios.filter(d => {
+    const e = typeof d === 'string' ? d : d.email;
+    return e !== email;
+  });
+  renderImpresoDestinatarios();
+}
+
+function abrirPickerParaImpreso() {
+  abrirPickerDestinatarios(
+    (destinatarios) => {
+      _impresoDestinatarios = destinatarios;
+      renderImpresoDestinatarios();
+    },
+    null,
+    _impresoDestinatarios
+  );
 }
 
 function renderArchivosConConfig() {
@@ -380,36 +424,28 @@ async function confirmarImpreso() {
       solicitud_id: _idImpreso, estado_anterior: 'recibido', estado_nuevo: 'impreso'
     });
 
-    const totalHojas  = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
-    const destPrevios = sol.destinatarios || [];
-    const solRef      = { id_solicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor, materia: sol.materia };
-    const solId       = _idImpreso;
+    const totalHojas = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
 
-    toast('Impresión registrada', 'success');
+    // Guardar destinatarios actualizados (puede haberlos editado en el modal)
+    await _sb.from('bib_solicitudes').update({ destinatarios: _impresoDestinatarios }).eq('id', _idImpreso);
+
+    if (_impresoDestinatarios.length) {
+      for (const dest of _impresoDestinatarios) {
+        const email = typeof dest === 'string' ? dest : dest.email;
+        const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idImpreso });
+        gasCall('enviarCorreo', {
+          tipo: 'impreso', destinatario: email,
+          numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
+          asunto: sol.asunto, profesor: sol.profesor,
+          materia: sol.materia, numHojas: totalHojas
+        }).catch(() => {});
+      }
+    }
+
+    toast('Impresión registrada. Correo enviado.', 'success');
     cerrarModal('modal-impreso');
     await cargarSolicitudes();
     await actualizarBadges();
-
-    // Picker pre-cargado con quienes se seleccionaron en el paso Recibir
-    await abrirPickerDestinatarios(
-      async (destinatarios) => {
-        // Si el operador modificó la lista, actualizar en DB para Entregado también
-        await _sb.from('bib_solicitudes').update({ destinatarios }).eq('id', solId);
-        for (const dest of destinatarios) {
-          const email = typeof dest === 'string' ? dest : dest.email;
-          const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: solId });
-          gasCall('enviarCorreo', {
-            tipo: 'impreso', destinatario: email,
-            numPersonal: numP || 1, idSolicitud: solRef.id_solicitud,
-            asunto: solRef.asunto, profesor: solRef.profesor,
-            materia: solRef.materia, numHojas: totalHojas
-          }).catch(() => {});
-        }
-        toast('Correo de impresión enviado', 'success');
-      },
-      null, // cancelar = no enviar correo, destinatarios quedan como estaban
-      destPrevios
-    );
 
   } catch(e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.classList.remove('loading'); btn.disabled = false; }
