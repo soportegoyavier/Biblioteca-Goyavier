@@ -346,6 +346,15 @@
         Todos los archivos de esta solicitud ya están asignados a trabajos.
       </p>
 
+      <!-- Destinatarios de notificación -->
+      <div class="fgroup" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <label style="margin-bottom:8px">Notificar a</label>
+        <div id="mi-dest-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
+        <button class="btn btn-ghost" style="width:100%" onclick="abrirPickerParaImpreso()">
+          <i class="fa fa-user-plus fa-sm"></i> Agregar colaborador
+        </button>
+      </div>
+
     </div>
     <div class="mf">
       <button class="btn btn-ghost" onclick="cerrarModal('modal-impreso')">Cancelar</button>
