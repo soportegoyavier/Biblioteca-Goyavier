@@ -95,24 +95,32 @@ function renderCards(rows) {
 
 // ── MARCAR RECIBIDO ───────────────────────────────────────────
 async function marcarRecibido(id, btn) {
-  if (!confirm('¿Confirmar como Recibida? Se enviará correo al solicitante.')) return;
   btn.classList.add('loading'); btn.disabled = true;
-  try {
-    const { data: idRes } = await _sb.rpc('generar_id_solicitud');
-    const { data: sol, error } = await _sb.from('bib_solicitudes')
-      .update({ estado:'recibido', id_solicitud: idRes, notif_recibido_en: new Date().toISOString() })
-      .eq('id', id).select('id_solicitud,asunto,email_destino,remitente_email,profesor').single();
-    if (error) throw error;
-    await _sb.from('bib_historial_estados').insert({ solicitud_id:id, estado_anterior:'pendiente', estado_nuevo:'recibido' });
-    gasCall('enviarCorreo', { tipo:'recibido', destinatario: sol.email_destino||sol.remitente_email,
-      idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor }).catch(()=>{});
-    toast(`Recibido · ID: ${idRes}`, 'success');
-    await cargarSolicitudes();
-    await actualizarBadges();
-  } catch(e) {
-    toast('Error: ' + e.message, 'error');
-    btn.classList.remove('loading'); btn.disabled = false;
-  }
+  await abrirPickerDestinatarios(
+    async (destinatarios) => {
+      try {
+        const { data: idRes } = await _sb.rpc('generar_id_solicitud');
+        const { data: sol, error } = await _sb.from('bib_solicitudes')
+          .update({ estado:'recibido', id_solicitud: idRes, notif_recibido_en: new Date().toISOString(), destinatarios })
+          .eq('id', id).select('id_solicitud,asunto,profesor').single();
+        if (error) throw error;
+        await _sb.from('bib_historial_estados').insert({ solicitud_id:id, estado_anterior:'pendiente', estado_nuevo:'recibido' });
+        if (destinatarios.length) {
+          const emailTo = destinatarios.map(d => d.email).join(',');
+          gasCall('enviarCorreo', { tipo:'recibido', destinatario: emailTo,
+            idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor }).catch(()=>{});
+        }
+        toast(`Recibido · ID: ${idRes}`, 'success');
+        await cargarSolicitudes();
+        await actualizarBadges();
+      } catch(e) {
+        toast('Error: ' + e.message, 'error');
+      } finally {
+        btn.classList.remove('loading'); btn.disabled = false;
+      }
+    },
+    () => { btn.classList.remove('loading'); btn.disabled = false; }
+  );
 }
 
 // ── MODAL IMPRESO ─────────────────────────────────────────────
@@ -362,19 +370,23 @@ async function confirmarImpreso() {
         area:     pdProf.area || null
       })
       .eq('id', _idImpreso)
-      .select('id_solicitud,asunto,email_destino,remitente_email,profesor,materia').single();
+      .select('id_solicitud,asunto,profesor,materia,destinatarios').single();
     if (error) throw error;
 
     await _sb.from('bib_historial_estados').insert({
       solicitud_id: _idImpreso, estado_anterior: 'recibido', estado_nuevo: 'impreso'
     });
 
-    const totalHojas = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
-    gasCall('enviarCorreo', {
-      tipo: 'impreso', destinatario: sol.email_destino || sol.remitente_email,
-      idSolicitud: sol.id_solicitud, asunto: sol.asunto,
-      profesor: sol.profesor, materia: sol.materia, numHojas: totalHojas
-    }).catch(() => {});
+    const totalHojas     = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
+    const destinatarios  = sol.destinatarios || [];
+    if (destinatarios.length) {
+      const emailTo = destinatarios.map(d => typeof d === 'string' ? d : d.email).join(',');
+      gasCall('enviarCorreo', {
+        tipo: 'impreso', destinatario: emailTo,
+        idSolicitud: sol.id_solicitud, asunto: sol.asunto,
+        profesor: sol.profesor, materia: sol.materia, numHojas: totalHojas
+      }).catch(() => {});
+    }
 
     toast('Impresión registrada. Correo enviado.', 'success');
     cerrarModal('modal-impreso');
@@ -482,19 +494,23 @@ async function confirmarEntrega() {
     const { data: sol, error } = await _sb.from('bib_solicitudes')
       .update({ estado:'entregado', nombre_recibe: recibe, fecha_entrega: ahora, notif_entregado_en: ahora })
       .eq('id', _idEntrega)
-      .select('id_solicitud,asunto,email_destino,remitente_email,profesor,materia,bib_documentos(num_hojas,tipo_impresion,forma_impresion)').single();
+      .select('id_solicitud,asunto,profesor,materia,destinatarios,bib_documentos(num_hojas,tipo_impresion,forma_impresion)').single();
     if (error) throw error;
     await _sb.from('bib_historial_estados').insert({ solicitud_id:_idEntrega, estado_anterior:'impreso', estado_nuevo:'entregado' });
-    const hojas = (sol.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
-    gasCall('enviarCorreo', {
-      tipo:'entregado', destinatario: sol.email_destino||sol.remitente_email,
-      idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor,
-      materia: sol.materia, numHojas: hojas,
-      tipoImpresion: sol.bib_documentos?.[0]?.tipo_impresion,
-      forma: sol.bib_documentos?.[0]?.forma_impresion,
-      nombreRecibe: recibe,
-      fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
-    }).catch(()=>{});
+    const hojas        = (sol.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
+    const destinatarios = sol.destinatarios || [];
+    if (destinatarios.length) {
+      const emailTo = destinatarios.map(d => typeof d === 'string' ? d : d.email).join(',');
+      gasCall('enviarCorreo', {
+        tipo:'entregado', destinatario: emailTo,
+        idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor,
+        materia: sol.materia, numHojas: hojas,
+        tipoImpresion: sol.bib_documentos?.[0]?.tipo_impresion,
+        forma: sol.bib_documentos?.[0]?.forma_impresion,
+        nombreRecibe: recibe,
+        fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
+      }).catch(()=>{});
+    }
     toast('Entrega registrada. Correo enviado.', 'success');
     cerrarModal('modal-entrega');
     await cargarSolicitudes();
