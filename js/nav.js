@@ -6,7 +6,8 @@ function navTo(page, el, mobId) {
 
   const titulos = {
     dashboard:'Dashboard', copias:'Gestión de Copias', reportes:'Reportes',
-    ventas:'Ventas / Personal', caja:'Caja', notificaciones:'Notificaciones'
+    ventas:'Ventas / Personal', caja:'Caja', notificaciones:'Notificaciones',
+    colaboradores:'Colaboradores'
   };
   document.getElementById('topbar-title').textContent = titulos[page] || page;
 
@@ -27,6 +28,7 @@ function navTo(page, el, mobId) {
   if (page === 'ventas')         cargarVentas();
   if (page === 'caja')           { _initCajaFecha(); cargarCaja(); }
   if (page === 'notificaciones') cargarNotificaciones();
+  if (page === 'colaboradores')  cargarColaboradores();
 }
 
 function refreshPage() {
@@ -36,6 +38,7 @@ function refreshPage() {
   else if (_pagina === 'ventas')         cargarVentas();
   else if (_pagina === 'caja')           cargarCaja();
   else if (_pagina === 'notificaciones') cargarNotificaciones();
+  else if (_pagina === 'colaboradores')  cargarColaboradores();
 }
 
 // ── MES ──────────────────────────────────────────────────────

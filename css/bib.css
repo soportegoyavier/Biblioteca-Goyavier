@@ -465,3 +465,40 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
 .btn-confirm-red{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.3)}
 .btn-confirm-red:hover:not(:disabled){background:rgba(248,81,73,.18)}
 .info-box-danger{border-color:rgba(248,81,73,.3)!important;background:rgba(248,81,73,.05)!important}
+
+/* ── COLABORADORES — Admin ─────────────────────── */
+.colab-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.colab-grid{display:flex;flex-direction:column;gap:18px}
+.colab-area-group{}
+.colab-area-hdr{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:4px 0 8px;border-bottom:1px solid var(--border);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.colab-card{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);transition:border-color .15s}
+.colab-card:hover{border-color:var(--blue)}
+.colab-card.colab-off{opacity:.5}
+.colab-info{flex:1;min-width:0}
+.colab-nombre{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.colab-cargo{font-size:12px;color:var(--muted);margin-top:1px}
+.colab-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.colab-email-chip{font-size:11px;padding:2px 7px;border-radius:20px;background:var(--bg);border:1px solid var(--border);color:var(--muted)}
+.colab-badge-off{font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(248,81,73,.12);color:var(--red);font-weight:500}
+.colab-acciones{display:flex;gap:4px;flex-shrink:0}
+/* Form emails */
+.mc-email-row{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+
+/* ── PICKER DE DESTINATARIOS ────────────────────── */
+.picker-area-lbl{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);padding:10px 0 4px;border-top:1px solid var(--border);margin-top:4px}
+.picker-area-lbl:first-child{border-top:none;margin-top:0;padding-top:2px}
+.picker-row{border-radius:7px;margin-bottom:2px;transition:background .1s}
+.picker-row.on{background:rgba(44,123,229,.06)}
+.picker-row-top{display:flex;align-items:flex-start;gap:10px;padding:8px 6px;cursor:pointer;border-radius:7px}
+.picker-row-top:hover{background:var(--bg)}
+.picker-chk-ico{width:18px;flex-shrink:0;margin-top:1px;font-size:15px}
+.picker-nombre{font-size:13px;font-weight:500}
+.picker-cargo{font-size:11px;color:var(--muted);margin-top:1px}
+.picker-emails-sub{padding:2px 0 6px 34px;display:flex;flex-direction:column;gap:3px}
+.picker-email-row{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 4px;border-radius:4px}
+.picker-email-row:hover{background:var(--bg);color:var(--text)}
+.picker-email-txt{word-break:break-all}
+.picker-chips-wrap{min-height:32px;padding:8px 0;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.picker-chip{display:inline-flex;align-items:center;font-size:11px;padding:3px 8px;border-radius:20px;background:rgba(44,123,229,.12);color:var(--blue);border:1px solid rgba(44,123,229,.25)}
+.picker-empty-msg{font-size:12px;color:var(--muted);font-style:italic}
+.picker-count-badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:var(--blue);color:#fff;font-size:11px;font-weight:700}
