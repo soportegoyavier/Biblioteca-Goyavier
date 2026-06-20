@@ -96,10 +96,6 @@ function renderCards(rows) {
 // ── MARCAR RECIBIDO ───────────────────────────────────────────
 async function marcarRecibido(id, btn) {
   btn.classList.add('loading'); btn.disabled = true;
-  // Pre-seleccionar el remitente si coincide con un colaborador registrado
-  const { data: preSol } = await _sb.from('bib_solicitudes')
-    .select('remitente_email').eq('id', id).single();
-  const preSelected = preSol?.remitente_email ? [{ email: preSol.remitente_email }] : [];
   await abrirPickerDestinatarios(
     async (destinatarios) => {
       try {
@@ -126,8 +122,7 @@ async function marcarRecibido(id, btn) {
         btn.classList.remove('loading'); btn.disabled = false;
       }
     },
-    () => { btn.classList.remove('loading'); btn.disabled = false; },
-    preSelected
+    () => { btn.classList.remove('loading'); btn.disabled = false; }
   );
 }
 
@@ -385,25 +380,37 @@ async function confirmarImpreso() {
       solicitud_id: _idImpreso, estado_anterior: 'recibido', estado_nuevo: 'impreso'
     });
 
-    const totalHojas     = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
-    const destinatarios  = sol.destinatarios || [];
-    if (destinatarios.length) {
-      for (const dest of destinatarios) {
-        const email = typeof dest === 'string' ? dest : dest.email;
-        const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idImpreso });
-        gasCall('enviarCorreo', {
-          tipo: 'impreso', destinatario: email,
-          numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
-          asunto: sol.asunto, profesor: sol.profesor,
-          materia: sol.materia, numHojas: totalHojas
-        }).catch(() => {});
-      }
-    }
+    const totalHojas  = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
+    const destPrevios = sol.destinatarios || [];
+    const solRef      = { id_solicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor, materia: sol.materia };
+    const solId       = _idImpreso;
 
-    toast('Impresión registrada. Correo enviado.', 'success');
+    toast('Impresión registrada', 'success');
     cerrarModal('modal-impreso');
     await cargarSolicitudes();
     await actualizarBadges();
+
+    // Picker pre-cargado con quienes se seleccionaron en el paso Recibir
+    await abrirPickerDestinatarios(
+      async (destinatarios) => {
+        // Si el operador modificó la lista, actualizar en DB para Entregado también
+        await _sb.from('bib_solicitudes').update({ destinatarios }).eq('id', solId);
+        for (const dest of destinatarios) {
+          const email = typeof dest === 'string' ? dest : dest.email;
+          const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: solId });
+          gasCall('enviarCorreo', {
+            tipo: 'impreso', destinatario: email,
+            numPersonal: numP || 1, idSolicitud: solRef.id_solicitud,
+            asunto: solRef.asunto, profesor: solRef.profesor,
+            materia: solRef.materia, numHojas: totalHojas
+          }).catch(() => {});
+        }
+        toast('Correo de impresión enviado', 'success');
+      },
+      null, // cancelar = no enviar correo, destinatarios quedan como estaban
+      destPrevios
+    );
+
   } catch(e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.classList.remove('loading'); btn.disabled = false; }
 }
