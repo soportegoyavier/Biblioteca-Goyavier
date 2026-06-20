@@ -351,7 +351,9 @@ function enviarCorreo(params) {
       } catch(ex2) { /* si falla el check, se envía igual */ }
     }
 
-    var ref   = params.idSolicitud || params.asunto || "Sin referencia";
+    var ref   = params.numPersonal
+      ? ("Solicitud #" + params.numPersonal)
+      : (params.idSolicitud || params.asunto || "Sin referencia");
     var asunto = "";
     var html   = "";
     var plain  = "";

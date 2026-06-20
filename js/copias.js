@@ -110,9 +110,12 @@ async function marcarRecibido(id, btn) {
         if (error) throw error;
         await _sb.from('bib_historial_estados').insert({ solicitud_id:id, estado_anterior:'pendiente', estado_nuevo:'recibido' });
         if (destinatarios.length) {
-          const emailTo = destinatarios.map(d => d.email).join(',');
-          gasCall('enviarCorreo', { tipo:'recibido', destinatario: emailTo,
-            idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor }).catch(()=>{});
+          for (const dest of destinatarios) {
+            const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: dest.email, p_solicitud_id: id });
+            gasCall('enviarCorreo', { tipo:'recibido', destinatario: dest.email,
+              numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
+              asunto: sol.asunto, profesor: sol.profesor }).catch(()=>{});
+          }
         }
         toast(`Recibido · ID: ${idRes}`, 'success');
         await cargarSolicitudes();
@@ -385,12 +388,16 @@ async function confirmarImpreso() {
     const totalHojas     = _trabajosImpresion.reduce((a, t) => a + t.total_hojas, 0);
     const destinatarios  = sol.destinatarios || [];
     if (destinatarios.length) {
-      const emailTo = destinatarios.map(d => typeof d === 'string' ? d : d.email).join(',');
-      gasCall('enviarCorreo', {
-        tipo: 'impreso', destinatario: emailTo,
-        idSolicitud: sol.id_solicitud, asunto: sol.asunto,
-        profesor: sol.profesor, materia: sol.materia, numHojas: totalHojas
-      }).catch(() => {});
+      for (const dest of destinatarios) {
+        const email = typeof dest === 'string' ? dest : dest.email;
+        const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idImpreso });
+        gasCall('enviarCorreo', {
+          tipo: 'impreso', destinatario: email,
+          numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
+          asunto: sol.asunto, profesor: sol.profesor,
+          materia: sol.materia, numHojas: totalHojas
+        }).catch(() => {});
+      }
     }
 
     toast('Impresión registrada. Correo enviado.', 'success');
@@ -505,16 +512,20 @@ async function confirmarEntrega() {
     const hojas        = (sol.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
     const destinatarios = sol.destinatarios || [];
     if (destinatarios.length) {
-      const emailTo = destinatarios.map(d => typeof d === 'string' ? d : d.email).join(',');
-      gasCall('enviarCorreo', {
-        tipo:'entregado', destinatario: emailTo,
-        idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: sol.profesor,
-        materia: sol.materia, numHojas: hojas,
-        tipoImpresion: sol.bib_documentos?.[0]?.tipo_impresion,
-        forma: sol.bib_documentos?.[0]?.forma_impresion,
-        nombreRecibe: recibe,
-        fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
-      }).catch(()=>{});
+      for (const dest of destinatarios) {
+        const email = typeof dest === 'string' ? dest : dest.email;
+        const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idEntrega });
+        gasCall('enviarCorreo', {
+          tipo:'entregado', destinatario: email,
+          numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
+          asunto: sol.asunto, profesor: sol.profesor,
+          materia: sol.materia, numHojas: hojas,
+          tipoImpresion: sol.bib_documentos?.[0]?.tipo_impresion,
+          forma: sol.bib_documentos?.[0]?.forma_impresion,
+          nombreRecibe: recibe,
+          fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
+        }).catch(()=>{});
+      }
     }
     toast('Entrega registrada. Correo enviado.', 'success');
     cerrarModal('modal-entrega');
