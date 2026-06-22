@@ -606,3 +606,437 @@ function sbPatch(url, key, endpoint, data) {
 function validarEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
+
+// ============================================================
+// REPORTES AUTOMÁTICOS MENSUALES
+// ============================================================
+// Script Properties adicionales requeridas:
+//   REPORTE_EMAIL → correo(s) separados por coma para recibir reportes
+//
+// PASO ÚNICO DE CONFIGURACIÓN (ejecutar UNA VEZ desde el editor GAS):
+//   Abre este script → Ejecutar → configurarTriggers()
+//   Esto activa el trigger diario que revisa fechas automáticamente.
+// ============================================================
+
+var _MESES_GAS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+                  'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+// ── Ejecutar UNA VEZ para activar los triggers ────────────────
+function configurarTriggers() {
+  // Borrar triggers previos del mismo nombre para evitar duplicados
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'verificarFechasMes') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('verificarFechasMes').timeBased().everyDays(1).atHour(7).create();
+  Logger.log('Trigger configurado: verificarFechasMes cada dia a las 7am');
+}
+
+// ── Corre automáticamente cada día a las 7am ─────────────────
+function verificarFechasMes() {
+  var hoy          = new Date();
+  var diasEnMes    = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+  var diaHoy       = hoy.getDate();
+  var diasRestantes = diasEnMes - diaHoy;
+  if (diasRestantes === 7) {
+    _alertaFinDeMes(7, hoy);
+  }
+  if (diaHoy === diasEnMes) {
+    try { _exportarMes(hoy.getFullYear(), hoy.getMonth()); }
+    catch(e) { _notificarError('exportarMes', e.toString()); }
+  }
+}
+
+// ── Ejecutar manualmente para probar sin esperar al fin de mes ─
+function exportarMesManual() {
+  var hoy = new Date();
+  _exportarMes(hoy.getFullYear(), hoy.getMonth());
+}
+
+// ── Motor principal de exportación ───────────────────────────
+function _exportarMes(ano, mes) {
+  var _url = _cfg('SUPABASE_URL');
+  var _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) throw new Error('SUPABASE_URL o SUPABASE_KEY no configurados en Script Properties');
+  var nom = _MESES_GAS[mes];
+  var ini = Utilities.formatDate(new Date(ano, mes, 1),     'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'");
+  var fin = Utilities.formatDate(new Date(ano, mes + 1, 1), 'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'");
+  Logger.log('Exportando ' + nom + ' ' + ano + ' (' + ini + ' → ' + fin + ')');
+
+  // Consultas Supabase
+  var qFecha = 'fecha_recepcion=gte.' + ini + '&fecha_recepcion=lt.' + fin;
+  var sols = sbGet(_url, _key,
+    'bib_solicitudes?' + qFecha +
+    '&select=id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,destinatarios,' +
+    'profesor,nombre_recibe,notif_impreso_en,fecha_entrega,' +
+    'bib_documentos(num_hojas,tipo_impresion,forma_impresion)' +
+    '&order=fecha_recepcion.asc');
+  var trabs = sbGet(_url, _key,
+    'bib_trabajos_impresion?created_at=gte.' + ini + '&created_at=lt.' + fin +
+    '&select=solicitud_id,nombre,profesor,total_hojas,archivos');
+  var ventas = sbGet(_url, _key,
+    'bib_solicitudes?' + qFecha +
+    '&tipo_remitente=eq.personal' +
+    '&select=id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,' +
+    'bib_trabajos_personal(precio_total,valor_pagado)' +
+    '&order=fecha_recepcion.asc');
+
+  if (!Array.isArray(sols))   throw new Error('Error solicitudes: ' + JSON.stringify(sols));
+  if (!Array.isArray(trabs))  trabs  = [];
+  if (!Array.isArray(ventas)) ventas = [];
+  Logger.log('Datos: ' + sols.length + ' sols, ' + trabs.length + ' trabs, ' + ventas.length + ' ventas');
+
+  // Crear Google Spreadsheet
+  var nombre = 'Biblioteca_' + nom + '_' + ano;
+  var ss = SpreadsheetApp.create(nombre);
+  _crearHojaResumen(ss, sols, trabs, ventas, nom, ano);
+  _crearHojaSolicitudes(ss, sols, nom, ano);
+  _crearHojaTrabajosImp(ss, sols, trabs, nom, ano);
+  _crearHojaVentas(ss, ventas, nom, ano);
+  // Borrar hoja por defecto vacía
+  ['Sheet1','Hoja 1','Hoja1'].forEach(function(n) {
+    var def = ss.getSheetByName(n);
+    if (def && ss.getNumSheets() > 1) ss.deleteSheet(def);
+  });
+  SpreadsheetApp.flush();
+
+  // Exportar como XLSX
+  var token    = ScriptApp.getOAuthToken();
+  var xlsxResp = UrlFetchApp.fetch(
+    'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=xlsx',
+    { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true }
+  );
+  if (xlsxResp.getResponseCode() !== 200) {
+    throw new Error('Error exportando XLSX: ' + xlsxResp.getContentText().substring(0, 300));
+  }
+  var xlsxBlob = xlsxResp.getBlob().setName(nombre + '.xlsx');
+
+  // Guardar en carpeta Drive
+  var carpeta  = _carpetaReportes();
+  carpeta.createFile(xlsxBlob);
+  var ssFile = DriveApp.getFileById(ss.getId());
+  carpeta.addFile(ssFile);
+  DriveApp.getRootFolder().removeFile(ssFile);
+
+  // Enviar email
+  var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
+  var emails    = emailDest.split(',').map(function(e){return e.trim();}).filter(Boolean);
+  var htmlBody  = _htmlEmailReporte(nom, ano, sols, ventas, 'https://drive.google.com/drive/folders/' + carpeta.getId());
+  emails.forEach(function(email) {
+    GmailApp.sendEmail(email,
+      'Reporte Biblioteca ' + nom + ' ' + ano + ' — guardado automaticamente',
+      'Reporte adjunto.',
+      { htmlBody: htmlBody, attachments: [xlsxBlob.copyBlob()], name: 'Biblioteca Goyavier' }
+    );
+  });
+  Logger.log('OK: ' + nombre + '.xlsx enviado a ' + emailDest);
+  return { ok: true, nombre: nombre };
+}
+
+// ── Hoja RESUMEN (KPIs generales + ventas) ────────────────────
+function _crearHojaResumen(ss, sols, trabs, ventas, nom, ano) {
+  var sh = ss.insertSheet('Resumen');
+  sh.setColumnWidth(1,220); sh.setColumnWidth(2,110); sh.setColumnWidth(3,110);
+  sh.setColumnWidth(4,110); sh.setColumnWidth(5,110);
+
+  function fHdr(row, txt, bg, fg, sz) {
+    sh.getRange(row,1,1,5).merge().setValue(txt)
+      .setBackground(bg).setFontColor(fg||'#FFFFFF')
+      .setFontWeight('bold').setFontSize(sz||11).setVerticalAlignment('middle');
+    sh.setRowHeight(row, 28);
+  }
+  function fKpiLbl(row, lbls, bg) {
+    for (var i=0;i<lbls.length;i++) {
+      sh.getRange(row,i+1).setValue(lbls[i]).setBackground(bg||'#F1F5F9')
+        .setFontWeight('bold').setFontSize(9).setFontColor('#334155')
+        .setHorizontalAlignment('center').setVerticalAlignment('middle');
+    }
+    sh.setRowHeight(row, 18);
+  }
+  function fKpiVal(row, vals, bgs) {
+    for (var i=0;i<vals.length;i++) {
+      sh.getRange(row,i+1).setValue(vals[i]).setBackground(bgs[i])
+        .setFontWeight('bold').setFontSize(14).setFontColor('#0f172a')
+        .setHorizontalAlignment('center').setVerticalAlignment('middle');
+    }
+    sh.setRowHeight(row, 34);
+  }
+
+  var r = 1;
+  fHdr(r++, 'BIBLIOTECA GOYAVIER — Reporte ' + nom + ' ' + ano, '#1e3a5f', '#FFFFFF', 13);
+  fHdr(r++, 'Generado: ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'), '#2c7be5', '#FFFFFF', 10);
+  sh.setRowHeight(r++, 8);
+
+  // Solicitudes
+  var cnt = {pendiente:0,recibido:0,impreso:0,entregado:0,cancelado:0};
+  var hTot=0,hBN=0,hCo=0,hUn=0,hDo=0;
+  sols.forEach(function(s) {
+    cnt[s.estado]=(cnt[s.estado]||0)+1;
+    (s.bib_documentos||[]).forEach(function(d){
+      var h=d.num_hojas||0; hTot+=h;
+      if(d.tipo_impresion==='Blanco y negro')hBN+=h;
+      if(d.tipo_impresion==='Color')hCo+=h;
+      if(d.forma_impresion==='Una cara')hUn+=h;
+      if(d.forma_impresion==='Doble cara')hDo+=h;
+    });
+  });
+  fHdr(r++, 'SOLICITUDES DEL MES', '#334155', '#FFFFFF');
+  fKpiLbl(r++, ['Pendientes','Recibidas','Impresas','Entregadas','Canceladas']);
+  fKpiVal(r++, [cnt.pendiente,cnt.recibido,cnt.impreso,cnt.entregado,cnt.cancelado],
+    ['#FEF9C3','#DBEAFE','#EDE9FE','#DCFCE7','#FEE2E2']);
+  sh.getRange(r,1).setValue('Total solicitudes').setFontWeight('bold').setBackground('#F1F5F9');
+  sh.getRange(r,2).setValue(sols.length).setFontWeight('bold').setFontSize(13).setHorizontalAlignment('center');
+  sh.setRowHeight(r++, 24);
+  sh.setRowHeight(r++, 8);
+
+  fHdr(r++, 'IMPRESION DEL MES', '#334155', '#FFFFFF');
+  fKpiLbl(r++, ['Total hojas','Blanco y negro','Color','Una cara','Doble cara']);
+  fKpiVal(r++, [hTot,hBN,hCo,hUn,hDo], ['#DBEAFE','#F1F5F9','#F1F5F9','#F1F5F9','#F1F5F9']);
+  sh.setRowHeight(r++, 8);
+
+  // Ventas resumen
+  var totCob=0,totRec=0;
+  ventas.forEach(function(v){
+    var tt=v.bib_trabajos_personal||[];
+    totCob+=tt.reduce(function(a,t){return a+(t.precio_total||0);},0);
+    totRec+=tt.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
+  });
+  function pesos(n){return '$ '+Math.round(n||0).toLocaleString();}
+  fHdr(r++, 'VENTAS DEL MES', '#1a5632', '#FFFFFF');
+  fKpiLbl(r++, ['Solicitudes','Total Cobrado','Total Recibido','Saldo'], '#E6F4EA');
+  fKpiVal(r++, [ventas.length, pesos(totCob), pesos(totRec), pesos(totCob-totRec)],
+    ['#DBEAFE','#DCFCE7','#DCFCE7',(totCob-totRec)>0?'#FEE2E2':'#DCFCE7']);
+  sh.setRowHeight(r++, 8);
+
+  // Top solicitantes
+  var topMap={};
+  sols.filter(function(s){return s.estado==='entregado';}).forEach(function(s){
+    var k=s.profesor||s.remitente_email||'Desconocido';
+    topMap[k]=(topMap[k]||0)+(s.bib_documentos||[]).reduce(function(a,d){return a+(d.num_hojas||0);},0);
+  });
+  var topArr=Object.keys(topMap).map(function(k){return[k,topMap[k]];}).sort(function(a,b){return b[1]-a[1];}).slice(0,8);
+  if (topArr.length) {
+    fHdr(r++, 'TOP SOLICITANTES (hojas entregadas)', '#334155', '#FFFFFF');
+    sh.getRange(r,1).setValue('Nombre / Correo').setFontWeight('bold').setBackground('#F1F5F9').setFontSize(9);
+    sh.getRange(r,2).setValue('Hojas').setFontWeight('bold').setBackground('#F1F5F9').setFontSize(9).setHorizontalAlignment('center');
+    sh.setRowHeight(r++, 18);
+    topArr.forEach(function(item,i){
+      var bg=i%2===0?'#FFFFFF':'#F8FAFC';
+      sh.getRange(r,1).setValue(item[0]).setBackground(bg);
+      sh.getRange(r,2).setValue(item[1]).setBackground(bg).setHorizontalAlignment('center').setFontWeight('bold');
+      sh.setRowHeight(r++, 18);
+    });
+  }
+}
+
+// ── Hoja SOLICITUDES ──────────────────────────────────────────
+function _crearHojaSolicitudes(ss, sols, nom, ano) {
+  var sh = ss.insertSheet('Solicitudes');
+  [30,110,120,200,220,90,230,75,75,75,80,85,115,115,170].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
+  var BGEST={pendiente:'#FEF9C3',recibido:'#DBEAFE',impreso:'#EDE9FE',entregado:'#DCFCE7',cancelado:'#FEE2E2'};
+  var FGEST={pendiente:'#713F12',recibido:'#1E40AF',impreso:'#5B21B6',entregado:'#166534',cancelado:'#991B1B'};
+
+  sh.getRange(1,1,1,15).merge().setValue('SOLICITUDES — ' + nom + ' ' + ano)
+    .setBackground('#1e3a5f').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(13).setVerticalAlignment('middle');
+  sh.setRowHeight(1, 28);
+  var hdrs=['N','ID Sistema','Fecha','Remitente','Asunto','Estado','Notificar a','Hojas','B y N','Color','1 cara','2 caras','F. Impresion','F. Entrega','Entregado a'];
+  sh.getRange(2,1,1,15).setValues([hdrs]).setBackground('#475569').setFontColor('#FFFFFF')
+    .setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center').setVerticalAlignment('middle');
+  sh.setRowHeight(2, 20);
+  sh.setFrozenRows(2);
+
+  var rows=[], tz=Session.getScriptTimeZone();
+  sols.forEach(function(s,i){
+    var docs=s.bib_documentos||[];
+    var hT=docs.reduce(function(a,d){return a+(d.num_hojas||0);},0);
+    var hB=docs.filter(function(d){return d.tipo_impresion==='Blanco y negro';}).reduce(function(a,d){return a+(d.num_hojas||0);},0);
+    var hC=docs.filter(function(d){return d.tipo_impresion==='Color';}).reduce(function(a,d){return a+(d.num_hojas||0);},0);
+    var hU=docs.filter(function(d){return d.forma_impresion==='Una cara';}).reduce(function(a,d){return a+(d.num_hojas||0);},0);
+    var hD=docs.filter(function(d){return d.forma_impresion==='Doble cara';}).reduce(function(a,d){return a+(d.num_hojas||0);},0);
+    var dest=Array.isArray(s.destinatarios)?s.destinatarios.map(function(d){return typeof d==='string'?d:(d.nombre||d.email);}).join(', '):'';
+    var fR=s.fecha_recepcion?Utilities.formatDate(new Date(s.fecha_recepcion),tz,'dd/MM/yyyy HH:mm'):'';
+    var fI=s.notif_impreso_en?Utilities.formatDate(new Date(s.notif_impreso_en),tz,'dd/MM/yyyy'):'';
+    var fE=(s.fecha_entrega||s.notif_entregado_en)?Utilities.formatDate(new Date(s.fecha_entrega||s.notif_entregado_en),tz,'dd/MM/yyyy'):'';
+    var est=(s.estado||'')[0].toUpperCase()+(s.estado||'').slice(1);
+    rows.push([i+1,s.id_solicitud||'',fR,s.remitente_email||'',s.asunto||'',est,dest,hT,hB,hC,hU,hD,fI,fE,s.nombre_recibe||'']);
+  });
+  if (rows.length) {
+    sh.getRange(3,1,rows.length,15).setValues(rows);
+    sols.forEach(function(s,i){
+      var bg=BGEST[s.estado]||(i%2===0?'#FFFFFF':'#F8FAFC');
+      var fg=FGEST[s.estado]||'#1e293b';
+      sh.getRange(i+3,1,1,15).setBackground(bg).setFontColor(fg);
+      sh.setRowHeight(i+3,18);
+    });
+    var hTotAll=rows.reduce(function(a,r){return a+(r[7]||0);},0);
+    var tr=rows.length+3;
+    sh.getRange(tr,1,1,15).setValues([['TOTAL','','','','',sols.length+'','',hTotAll,'','','','','','','']]);
+    sh.getRange(tr,1,1,15).setBackground('#E2E8F0').setFontWeight('bold').setFontColor('#0f172a');
+    sh.setRowHeight(tr,22);
+  }
+}
+
+// ── Hoja TRABAJOS IMPRESION ───────────────────────────────────
+function _crearHojaTrabajosImp(ss, sols, trabs, nom, ano) {
+  var sh = ss.insertSheet('Trabajos Impresion');
+  [30,110,230,180,90,80,380].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
+  sh.getRange(1,1,1,7).merge().setValue('TRABAJOS DE IMPRESION — ' + nom + ' ' + ano)
+    .setBackground('#1e3a5f').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(13).setVerticalAlignment('middle');
+  sh.setRowHeight(1,28);
+  sh.getRange(2,1,1,7).setValues([['N','ID Solicitud','Nombre Trabajo','Colaborador','Hojas','Archivos','Detalle']])
+    .setBackground('#475569').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
+  sh.setRowHeight(2,20); sh.setFrozenRows(2);
+  var solMap={};
+  sols.forEach(function(s){solMap[s.id]=s.id_solicitud;});
+  var rows=[];
+  trabs.forEach(function(t,i){
+    var arch=Array.isArray(t.archivos)?t.archivos:[];
+    var det=arch.map(function(a){return (a.nombre||'')+'('+a.copias+'c x '+a.paginas+'p, '+(a.tipo_impresion||'')+', '+(a.tamano_hoja||'')+')';}).join(' | ');
+    rows.push([i+1,solMap[t.solicitud_id]||'',t.nombre||'',t.profesor||'',t.total_hojas||0,arch.length,det]);
+  });
+  if (rows.length) {
+    sh.getRange(3,1,rows.length,7).setValues(rows);
+    rows.forEach(function(_,i){
+      sh.getRange(i+3,1,1,7).setBackground(i%2===0?'#FFFFFF':'#F8FAFC');
+      sh.setRowHeight(i+3,18);
+    });
+    sh.getRange(3,7,rows.length,1).setWrap(true);
+    var tr=rows.length+3;
+    var hTotTrab=trabs.reduce(function(a,t){return a+(t.total_hojas||0);},0);
+    var archTot=trabs.reduce(function(a,t){return a+(Array.isArray(t.archivos)?t.archivos.length:0);},0);
+    sh.getRange(tr,1,1,7).setValues([['TOTAL','','','',hTotTrab,archTot,'']]);
+    sh.getRange(tr,1,1,7).setBackground('#E2E8F0').setFontWeight('bold').setFontColor('#0f172a');
+    sh.setRowHeight(tr,22);
+  }
+}
+
+// ── Hoja VENTAS ───────────────────────────────────────────────
+function _crearHojaVentas(ss, ventas, nom, ano) {
+  var sh = ss.insertSheet('Ventas');
+  [30,100,220,250,110,80,120,120,120].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
+  var BVST={pagado:'#DCFCE7',deuda:'#FEE2E2',sin:'#F1F5F9',cancelado:'#FEE2E2'};
+  var FVST={pagado:'#166534',deuda:'#991B1B',sin:'#475569',cancelado:'#991B1B'};
+  var tz=Session.getScriptTimeZone();
+  function pesos(n){return '$ '+Math.round(n||0).toLocaleString();}
+
+  var totCob=0,totRec=0,cPag=0,cDeu=0,cSin=0,cCan=0;
+  ventas.forEach(function(r){
+    if(r.estado==='cancelado'){cCan++;return;}
+    var tt=r.bib_trabajos_personal||[];
+    var co=tt.reduce(function(a,t){return a+(t.precio_total||0);},0);
+    var re=tt.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
+    totCob+=co; totRec+=re;
+    if(!tt.length)cSin++; else if(co-re>0.005)cDeu++; else cPag++;
+  });
+
+  sh.getRange(1,1,1,9).merge().setValue('VENTAS — ' + nom + ' ' + ano)
+    .setBackground('#1a5632').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(13).setVerticalAlignment('middle');
+  sh.setRowHeight(1,28);
+  sh.getRange(2,1,1,4).setValues([['Total Cobrado','Total Recibido','Saldo Pendiente','Solicitudes']])
+    .setBackground('#166534').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
+  sh.setRowHeight(2,18);
+  [pesos(totCob),pesos(totRec),pesos(totCob-totRec),ventas.length].forEach(function(v,i){
+    sh.getRange(3,i+1).setValue(v).setBackground(i===2&&(totCob-totRec)>0?'#FEE2E2':'#DCFCE7')
+      .setFontWeight('bold').setFontSize(12).setHorizontalAlignment('center');
+  });
+  sh.setRowHeight(3,32);
+  sh.getRange(4,1,1,4).setValues([['Pagadas','Con deuda','Sin registrar','Canceladas']])
+    .setBackground('#166534').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
+  sh.setRowHeight(4,18);
+  [cPag,cDeu,cSin,cCan].forEach(function(v,i){
+    sh.getRange(5,i+1).setValue(v).setBackground(['#DCFCE7','#FEE2E2','#F1F5F9','#F1F5F9'][i])
+      .setFontWeight('bold').setFontSize(14).setHorizontalAlignment('center');
+  });
+  sh.setRowHeight(5,32);
+  sh.setRowHeight(6,10);
+  sh.getRange(7,1,1,9).setValues([['N','Fecha','Remitente','Asunto','Estado Pago','Trabajos','Cobrado','Recibido','Saldo']])
+    .setBackground('#14532D').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
+  sh.setRowHeight(7,20); sh.setFrozenRows(7);
+
+  var rows=[];
+  ventas.forEach(function(s,i){
+    var tt=s.bib_trabajos_personal||[];
+    var co=tt.reduce(function(a,t){return a+(t.precio_total||0);},0);
+    var re=tt.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
+    var sd=co-re;
+    var ep,estKey;
+    if(s.estado==='cancelado'){ep='Cancelada';estKey='cancelado';}
+    else if(!tt.length){ep='Sin registrar';estKey='sin';}
+    else if(sd>0.005){ep='Con deuda';estKey='deuda';}
+    else{ep='Pagado';estKey='pagado';}
+    var f=s.fecha_recepcion?Utilities.formatDate(new Date(s.fecha_recepcion),tz,'dd/MM/yyyy'):'';
+    rows.push({v:[i+1,f,s.remitente_email||'',s.asunto||'',ep,tt.length,pesos(co),pesos(re),sd>0.005?pesos(sd):'—'],k:estKey});
+  });
+  if (rows.length) {
+    sh.getRange(8,1,rows.length,9).setValues(rows.map(function(r){return r.v;}));
+    rows.forEach(function(r,i){
+      sh.getRange(8+i,1,1,9).setBackground(BVST[r.k]||(i%2===0?'#FFFFFF':'#F0FDF4')).setFontColor(FVST[r.k]||'#1e293b');
+      sh.setRowHeight(8+i,18);
+    });
+    var tr=8+rows.length;
+    sh.getRange(tr,1,1,9).setValues([['TOTAL','','','','',ventas.length,pesos(totCob),pesos(totRec),pesos(totCob-totRec)]]);
+    sh.getRange(tr,1,1,9).setBackground('#BBF7D0').setFontWeight('bold').setFontColor('#14532D');
+    sh.setRowHeight(tr,24);
+  }
+}
+
+// ── Carpeta en Drive para guardar reportes ────────────────────
+function _carpetaReportes() {
+  var nombre = 'Biblioteca Goyavier - Reportes';
+  var it = DriveApp.getFoldersByName(nombre);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(nombre);
+}
+
+// ── Alerta email 7 días antes del fin de mes ─────────────────
+function _alertaFinDeMes(dias, fecha) {
+  var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
+  if (!emailDest) return;
+  var nom = _MESES_GAS[fecha.getMonth()];
+  var ano = fecha.getFullYear();
+  var html = '<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto">'
+    + '<div style="background:#1e3a5f;color:#fff;padding:18px;border-radius:8px 8px 0 0">'
+    + '<h2 style="margin:0;font-size:16px">Biblioteca Goyavier — Alerta Cierre de Mes</h2></div>'
+    + '<div style="background:#fff3cd;border:1px solid #ffc107;padding:18px;border-radius:0 0 8px 8px">'
+    + '<p style="font-size:14px;margin:0 0 10px"><strong>Faltan ' + dias + ' dias para terminar '
+    + nom + ' ' + ano + '</strong></p>'
+    + '<p style="color:#856404;margin:0;font-size:13px">El ultimo dia del mes el sistema generara el reporte '
+    + 'Excel automaticamente y lo enviara a este correo con copia guardada en Google Drive.<br><br>'
+    + '<em>No es necesario hacer nada — este es solo un recordatorio.</em></p>'
+    + '</div></div>';
+  emailDest.split(',').map(function(e){return e.trim();}).filter(Boolean).forEach(function(email) {
+    GmailApp.sendEmail(email, 'Biblioteca: faltan ' + dias + ' dias para cerrar ' + nom + ' ' + ano, '', {
+      htmlBody: html, name: 'Biblioteca Goyavier'
+    });
+  });
+}
+
+// ── Email con el reporte adjunto ─────────────────────────────
+function _htmlEmailReporte(nom, ano, sols, ventas, driveUrl) {
+  var total    = sols.length;
+  var entregadas = sols.filter(function(s){return s.estado==='entregado';}).length;
+  var hTot     = sols.reduce(function(a,s){return a+(s.bib_documentos||[]).reduce(function(b,d){return b+(d.num_hojas||0);},0);},0);
+  var totCob   = ventas.reduce(function(a,r){return a+(r.bib_trabajos_personal||[]).reduce(function(b,t){return b+(t.precio_total||0);},0);},0);
+  function pesos(n){return '$ '+Math.round(n||0).toLocaleString();}
+  return '<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto">'
+    + '<div style="background:#1e3a5f;color:#fff;padding:20px;border-radius:8px 8px 0 0">'
+    + '<h2 style="margin:0;font-size:16px">Reporte Biblioteca — ' + nom + ' ' + ano + '</h2>'
+    + '<p style="margin:6px 0 0;opacity:.75;font-size:12px">Generado automaticamente al cierre del mes</p></div>'
+    + '<div style="background:#f8fafc;border:1px solid #e2e8f0;padding:20px;border-radius:0 0 8px 8px">'
+    + '<table style="width:100%;border-collapse:collapse;font-size:14px">'
+    + '<tr style="background:#f1f5f9"><td style="padding:8px;color:#64748b">Solicitudes totales</td><td style="font-weight:bold">' + total + '</td></tr>'
+    + '<tr><td style="padding:8px;color:#64748b">Solicitudes entregadas</td><td style="font-weight:bold;color:#166534">' + entregadas + '</td></tr>'
+    + '<tr style="background:#f1f5f9"><td style="padding:8px;color:#64748b">Total hojas impresas</td><td style="font-weight:bold">' + hTot + '</td></tr>'
+    + '<tr><td style="padding:8px;color:#64748b">Ventas del mes</td><td style="font-weight:bold;color:#1e3a5f">' + pesos(totCob) + '</td></tr>'
+    + '</table>'
+    + '<div style="margin-top:14px;padding:12px;background:#dbeafe;border-radius:6px;font-size:13px">'
+    + 'Archivo Excel adjunto. Tambien guardado en '
+    + '<a href="' + driveUrl + '" style="color:#1d4ed8">Google Drive → Biblioteca Goyavier - Reportes</a></div>'
+    + '</div></div>';
+}
+
+// ── Notificar error al admin ──────────────────────────────────
+function _notificarError(contexto, msg) {
+  var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
+  if (!emailDest) return;
+  GmailApp.sendEmail(emailDest, 'ERROR Reporte Biblioteca: ' + contexto,
+    'Error:\n\n' + msg, { name: 'Biblioteca Goyavier' });
+}
