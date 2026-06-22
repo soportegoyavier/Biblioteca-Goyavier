@@ -358,14 +358,15 @@ async function confirmarImpreso() {
       solicitud_id: _idImpreso, estado_anterior:'recibido', estado_nuevo:'impreso'
     });
 
-    const totalHojas = rows.reduce((s, r) => s + r.total_hojas, 0);
-    for (const dest of destGuardar) {
+    for (let i = 0; i < colabsConArch.length; i++) {
+      const d = colabsConArch[i];
+      const r = rows[i];
       const { data: numP } = await _sb.rpc('get_num_solicitud_para_email',
-        { p_email: dest.email, p_solicitud_id: _idImpreso });
-      gasCall('enviarCorreo', { tipo:'impreso', destinatario: dest.email,
+        { p_email: d.email, p_solicitud_id: _idImpreso });
+      gasCall('enviarCorreo', { tipo:'impreso', destinatario: d.email,
         numPersonal: numP||1, idSolicitud: sol.id_solicitud,
-        asunto: sol.asunto, profesor: sol.profesor,
-        materia: sol.materia, numHojas: totalHojas }).catch(()=>{});
+        asunto: sol.asunto, profesor: d.nombre,
+        materia: sol.materia, numHojas: r.total_hojas }).catch(()=>{});
     }
 
     toast('Impresión registrada. Correo enviado.', 'success');
