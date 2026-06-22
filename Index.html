@@ -185,7 +185,18 @@
 
       <!-- REPORTES -->
       <div class="page" id="page-reportes">
-        <div id="rep-content"><div class="loader-wrap"><div class="loader"></div></div></div>
+        <div class="sec-hdr" style="margin-bottom:0;padding-bottom:14px;border-bottom:1px solid var(--border2)">
+          <div class="sec-title" id="rep-title">Estadísticas</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-ghost" onclick="exportarExcelGeneral()" title="Exportar reporte general del mes">
+              <i class="fa fa-file-excel fa-sm" style="color:#217346"></i> Excel General
+            </button>
+            <button class="btn btn-ghost" onclick="exportarExcelVentas()" title="Exportar reporte de ventas del mes">
+              <i class="fa fa-file-excel fa-sm" style="color:#217346"></i> Excel Ventas
+            </button>
+          </div>
+        </div>
+        <div id="rep-content" style="margin-top:18px"><div class="loader-wrap"><div class="loader"></div></div></div>
       </div>
 
       <!-- VENTAS / PERSONAL -->
