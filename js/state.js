@@ -13,6 +13,7 @@ let _profesoresData      = {}; // nombre → { area }
 let _asuntoSolicitud     = '';
 let _impresoDestinatarios = []; // destinatarios visibles en el modal de impresión
 let _impresoExpanded = new Set(); // emails de colaboradores expandidos en modal impresión
+let _entregaSelNames = new Set(); // nombres seleccionados en modal entrega
 
 let _mes = _hoy.getMonth();
 let _ano = _hoy.getFullYear();

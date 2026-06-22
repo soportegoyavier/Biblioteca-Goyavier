@@ -456,18 +456,18 @@ async function abrirModalEntrega(id) {
     document.getElementById('me-id').textContent = data.id_solicitud || 'Sin ID';
     document.getElementById('me-asunto').textContent = data.asunto || '';
 
-    // Pre-llenar con el primer destinatario de impresión (no el remitente)
+    // Pre-llenar con todos los destinatarios de impresión (no el remitente)
     const dests = Array.isArray(data.destinatarios) && data.destinatarios.length ? data.destinatarios : [];
-    const primerNombre = dests.length ? (typeof dests[0]==='string' ? dests[0] : (dests[0].nombre||dests[0].email)) : '';
-    document.getElementById('me-recibe').value = primerNombre;
+    const destNombres = dests.map(d => typeof d === 'string' ? d : (d.nombre || d.email));
+    _entregaSelNames = new Set(destNombres);
+    document.getElementById('me-recibe').value = destNombres.join(', ');
 
-    // Chips de sugerencia cuando hay más de un destinatario
-    if (sugerEl && dests.length > 1) {
-      sugerEl.innerHTML = '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Sugerencias:</div>' +
-        dests.map(d => {
-          const nom = typeof d === 'string' ? d : (d.nombre || d.email);
-          return `<button type="button" class="chip-suger" onclick="document.getElementById('me-recibe').value='${nom.replace(/'/g,"\\'")}'">${escHtml(nom)}</button>`;
-        }).join('');
+    // Chips multi-selección para cada destinatario
+    if (sugerEl && destNombres.length) {
+      sugerEl.innerHTML = destNombres.map(nom =>
+        `<button type="button" class="chip-suger chip-suger-on"
+          onclick="toggleEntregaChip('${nom.replace(/'/g,"\\'")}',this)">${escHtml(nom)}</button>`
+      ).join('');
     }
 
     const hojas = (data.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
@@ -478,6 +478,17 @@ async function abrirModalEntrega(id) {
        Profesor: ${data.profesor||'—'} · Materia: ${data.materia||'—'}<br>
        ${hojas} hojas · ${tipo} · ${forma}`;
   } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+function toggleEntregaChip(nom, btn) {
+  if (_entregaSelNames.has(nom)) {
+    _entregaSelNames.delete(nom);
+    btn.classList.remove('chip-suger-on');
+  } else {
+    _entregaSelNames.add(nom);
+    btn.classList.add('chip-suger-on');
+  }
+  document.getElementById('me-recibe').value = Array.from(_entregaSelNames).join(', ');
 }
 
 async function confirmarEntrega() {
@@ -573,10 +584,19 @@ async function verDetalle(id) {
       const cards = trabajos.map(t => {
         const arch = Array.isArray(t.archivos) ? t.archivos : [];
         const archLines = arch.map(a =>
-          `<div style="display:flex;gap:6px;align-items:baseline;font-size:12px;margin-top:3px;padding-left:8px">
-            <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
-            <span style="flex:1">${escHtml(a.nombre||'')}</span>
-            <span style="color:var(--muted);white-space:nowrap">${a.copias||0}c × ${a.paginas||0}p — ${escHtml(a.tipo_impresion||'')} — ${escHtml(a.tamano_hoja||'')} — <strong>${a.total_hojas||0} hj</strong></span>
+          `<div style="margin-top:5px;padding-left:8px">
+            <div style="display:flex;gap:6px;align-items:center;font-size:12px">
+              <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
+              <span style="flex:1;font-weight:500">${escHtml(a.nombre||'')}</span>
+            </div>
+            <div style="font-size:11px;color:var(--muted);padding-left:18px;margin-top:2px">
+              ${a.copias||0} copia${(a.copias||0)!==1?'s':''} &nbsp;·&nbsp;
+              ${a.paginas||0} página${(a.paginas||0)!==1?'s':''} &nbsp;·&nbsp;
+              ${escHtml(a.tipo_impresion||'—')} &nbsp;·&nbsp;
+              ${escHtml(a.modo_impresion||'')} &nbsp;·&nbsp;
+              ${escHtml(a.tamano_hoja||'—')} &nbsp;·&nbsp;
+              <strong style="color:var(--text)">${a.total_hojas||0} hoja${(a.total_hojas||0)!==1?'s':''}</strong>
+            </div>
           </div>`
         ).join('');
         return `<div style="border:1px solid var(--border2);border-radius:7px;padding:10px 12px;background:var(--s2);margin-bottom:6px">
