@@ -445,15 +445,31 @@ async function abrirModalEntrega(id) {
   document.getElementById('me-id').textContent = 'Cargando...';
   document.getElementById('me-asunto').textContent = '';
   document.getElementById('me-info').innerHTML = '';
+  const sugerEl = document.getElementById('me-sugeridos');
+  if (sugerEl) sugerEl.innerHTML = '';
   document.getElementById('modal-entrega').classList.add('open');
   try {
     const { data, error } = await _sb.from('bib_solicitudes')
-      .select('id_solicitud,asunto,email_destino,remitente_email,remitente_nombre,profesor,materia,bib_documentos(num_hojas,tipo_impresion,forma_impresion)')
+      .select('id_solicitud,asunto,email_destino,remitente_email,remitente_nombre,profesor,materia,destinatarios,bib_documentos(num_hojas,tipo_impresion,forma_impresion)')
       .eq('id', id).single();
     if (error) throw error;
     document.getElementById('me-id').textContent = data.id_solicitud || 'Sin ID';
     document.getElementById('me-asunto').textContent = data.asunto || '';
-    document.getElementById('me-recibe').value = data.remitente_nombre || '';
+
+    // Pre-llenar con el primer destinatario de impresión (no el remitente)
+    const dests = Array.isArray(data.destinatarios) && data.destinatarios.length ? data.destinatarios : [];
+    const primerNombre = dests.length ? (typeof dests[0]==='string' ? dests[0] : (dests[0].nombre||dests[0].email)) : '';
+    document.getElementById('me-recibe').value = primerNombre;
+
+    // Chips de sugerencia cuando hay más de un destinatario
+    if (sugerEl && dests.length > 1) {
+      sugerEl.innerHTML = '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Sugerencias:</div>' +
+        dests.map(d => {
+          const nom = typeof d === 'string' ? d : (d.nombre || d.email);
+          return `<button type="button" class="chip-suger" onclick="document.getElementById('me-recibe').value='${nom.replace(/'/g,"\\'")}'">${escHtml(nom)}</button>`;
+        }).join('');
+    }
+
     const hojas = (data.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
     const tipo  = data.bib_documentos?.[0]?.tipo_impresion || '—';
     const forma = data.bib_documentos?.[0]?.forma_impresion || '—';
@@ -510,7 +526,10 @@ async function verDetalle(id) {
   document.getElementById('md-body').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   document.getElementById('modal-detalle').classList.add('open');
   try {
-    const { data, error } = await _sb.from('bib_solicitudes').select('*,bib_documentos(*)').eq('id', id).single();
+    const [{ data, error }, { data: trabajos }] = await Promise.all([
+      _sb.from('bib_solicitudes').select('*,bib_documentos(*)').eq('id', id).single(),
+      _sb.from('bib_trabajos_impresion').select('profesor,archivos,total_hojas').eq('solicitud_id', id)
+    ]);
     if (error) throw error;
     document.getElementById('md-id').textContent = data.id_solicitud || 'Sin ID';
 
@@ -542,20 +561,52 @@ async function verDetalle(id) {
         </div>`;
       }).join('')}</div>` : '<p style="font-size:12px;color:var(--dim)">Sin adjuntos</p>';
 
+    // Destinatarios como texto
+    const dests = Array.isArray(data.destinatarios) && data.destinatarios.length
+      ? data.destinatarios.map(d => (typeof d === 'string' ? d : (d.nombre || d.email))).join(', ')
+      : (data.email_destino || '—');
+
+    // Sección trabajos de impresión
+    let trabajosHTML = '';
+    if (trabajos && trabajos.length && ['impreso','entregado'].includes(data.estado)) {
+      const totalGeneral = trabajos.reduce((s, t) => s + (t.total_hojas || 0), 0);
+      const cards = trabajos.map(t => {
+        const arch = Array.isArray(t.archivos) ? t.archivos : [];
+        const archLines = arch.map(a =>
+          `<div style="display:flex;gap:6px;align-items:baseline;font-size:12px;margin-top:3px;padding-left:8px">
+            <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
+            <span style="flex:1">${escHtml(a.nombre||'')}</span>
+            <span style="color:var(--muted);white-space:nowrap">${a.copias||0}c × ${a.paginas||0}p — ${escHtml(a.tipo_impresion||'')} — ${escHtml(a.tamano_hoja||'')} — <strong>${a.total_hojas||0} hj</strong></span>
+          </div>`
+        ).join('');
+        return `<div style="border:1px solid var(--border2);border-radius:7px;padding:10px 12px;background:var(--s2);margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="font-weight:600;font-size:13px"><i class="fa fa-user fa-sm" style="color:var(--muted);margin-right:5px"></i>${escHtml(t.profesor||'—')}</div>
+            <span style="font-size:12px;font-weight:600;color:var(--blue)">${t.total_hojas||0} hoja${t.total_hojas!==1?'s':''}</span>
+          </div>
+          ${archLines}
+        </div>`;
+      }).join('');
+      trabajosHTML = `<hr class="msep">
+      <div class="msec-hdr" style="margin-bottom:10px">Trabajos de impresión</div>
+      ${cards}
+      <div style="text-align:right;font-size:13px;font-weight:600;color:var(--text);margin-top:4px">Total: ${totalGeneral} hoja${totalGeneral!==1?'s':''}</div>`;
+    }
+
     document.getElementById('md-body').innerHTML = `
       <div class="dr"><span class="dlbl">Asunto</span><span class="dval">${data.asunto||'—'}</span></div>
       <div class="dr"><span class="dlbl">Remitente</span><span class="dval">${data.remitente_email||'—'}</span></div>
-      <div class="dr"><span class="dlbl">Notificar a</span><span class="dval">${data.email_destino||'—'}</span></div>
+      <div class="dr"><span class="dlbl">Notificar a</span><span class="dval">${dests}</span></div>
       <div class="dr"><span class="dlbl">Estado</span><span class="dval">${badge(data.estado)}</span></div>
       <div class="dr"><span class="dlbl">Fecha recepción</span><span class="dval">${fmtFecha(data.fecha_recepcion)}</span></div>
       <hr class="msep">
-      <div class="dr"><span class="dlbl">Profesor</span><span class="dval">${data.profesor||'—'}</span></div>
       <div class="dr"><span class="dlbl">Área</span><span class="dval">${data.area||'—'}</span></div>
       ${data.observaciones?`<div class="dr"><span class="dlbl">Observaciones</span><span class="dval">${data.observaciones}</span></div>`:''}
       ${data.estado==='entregado'?`
       <hr class="msep">
       <div class="dr"><span class="dlbl">Entregado a</span><span class="dval">${data.nombre_recibe||'—'}</span></div>
       <div class="dr"><span class="dlbl">Fecha entrega</span><span class="dval">${fmtFecha(data.fecha_entrega)}</span></div>`:''}
+      ${trabajosHTML}
       <hr class="msep">
       <div class="msec-hdr" style="margin-bottom:10px">Documentos adjuntos</div>
       ${adjHTML}`;
