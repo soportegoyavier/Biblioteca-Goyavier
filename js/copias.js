@@ -505,21 +505,30 @@ async function confirmarEntrega() {
       .select('id_solicitud,asunto,profesor,materia,destinatarios,bib_documentos(num_hojas,tipo_impresion,forma_impresion)').single();
     if (error) throw error;
     await _sb.from('bib_historial_estados').insert({ solicitud_id:_idEntrega, estado_anterior:'impreso', estado_nuevo:'entregado' });
-    const hojas        = (sol.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
+
+    const { data: trabajos } = await _sb.from('bib_trabajos_impresion')
+      .select('profesor,archivos,total_hojas').eq('solicitud_id', _idEntrega);
+    const trabajosMap = new Map((trabajos||[]).map(t => [t.profesor, t]));
+
     const destinatarios = sol.destinatarios || [];
+    const fechaFmt = new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' });
     if (destinatarios.length) {
       for (const dest of destinatarios) {
-        const email = typeof dest === 'string' ? dest : dest.email;
+        const email  = typeof dest === 'string' ? dest : dest.email;
+        const nombre = typeof dest === 'string' ? dest : (dest.nombre || dest.email);
+        const trab   = trabajosMap.get(nombre);
+        const hojasDest = trab?.total_hojas ?? 0;
+        const primerArch = Array.isArray(trab?.archivos) ? trab.archivos[0] : null;
         const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idEntrega });
         gasCall('enviarCorreo', {
           tipo:'entregado', destinatario: email,
           numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
-          asunto: sol.asunto, profesor: sol.profesor,
-          materia: sol.materia, numHojas: hojas,
-          tipoImpresion: sol.bib_documentos?.[0]?.tipo_impresion,
-          forma: sol.bib_documentos?.[0]?.forma_impresion,
-          nombreRecibe: recibe,
-          fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
+          asunto: sol.asunto, profesor: nombre,
+          materia: sol.materia, numHojas: hojasDest,
+          tipoImpresion: primerArch?.tipo_impresion,
+          forma: primerArch?.modo_impresion,
+          nombreRecibe: nombre,
+          fechaEntrega: fechaFmt
         }).catch(()=>{});
       }
     }
