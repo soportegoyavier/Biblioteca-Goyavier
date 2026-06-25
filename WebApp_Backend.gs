@@ -1080,15 +1080,20 @@ function _notificarError(contexto, msg) {
 // ── Reprocesar un correo ya importado (re-detecta adjuntos Drive) ─
 // Uso: desde el editor GAS, ejecutar reprocesarUltimoCorreo()
 // O para un correo específico: reprocesarCorreo("GMAIL_MESSAGE_ID")
-function reprocesarUltimoCorreo() {
+function reprocesarUltimoCorreo() { reprocesarUltimosCorreos(1); }
+function reprocesarUltimos3Correos() { reprocesarUltimosCorreos(3); }
+
+function reprocesarUltimosCorreos(n) {
   var _url = _cfg('SUPABASE_URL');
   var _key = _cfg('SUPABASE_KEY');
-  // Obtener la solicitud más reciente
-  var res = sbGet(_url, _key, 'bib_solicitudes?order=fecha_recepcion.desc&limit=1&select=id,gmail_message_id,asunto,remitente_email');
+  var res = sbGet(_url, _key, 'bib_solicitudes?order=fecha_recepcion.desc&limit=' + (n||1) + '&select=id,gmail_message_id,asunto,remitente_email');
   if (!Array.isArray(res) || !res[0]) throw new Error('No hay solicitudes en la base de datos');
-  var sol = res[0];
-  Logger.log('Reprocesando: id=' + sol.id + ' | ' + sol.remitente_email + ' | ' + sol.asunto);
-  reprocesarCorreo(sol.gmail_message_id);
+  for (var i = 0; i < res.length; i++) {
+    var sol = res[i];
+    Logger.log('--- Reprocesando ' + (i+1) + '/' + res.length + ': ' + sol.remitente_email + ' | ' + sol.asunto);
+    reprocesarCorreo(sol.gmail_message_id);
+  }
+  Logger.log('=== LISTO: ' + res.length + ' correos reprocesados');
 }
 
 function reprocesarCorreo(gmailMsgId) {
