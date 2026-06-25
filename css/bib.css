@@ -458,6 +458,8 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
 }
 
 /* ── DANGER BUTTON VARIANTS ─────────────────────── */
+.btn-mover-inst{padding:4px 7px;background:rgba(56,139,253,.1);color:var(--accent,#388bfd);border:1px solid rgba(56,139,253,.25)}
+.btn-mover-inst:hover:not(:disabled){background:rgba(56,139,253,.2)}
 .btn-danger-sm{padding:4px 7px;background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)}
 .btn-danger-sm:hover:not(:disabled){background:rgba(248,81,73,.18)}
 .btn-danger{background:rgba(248,81,73,.18);color:var(--red);border:1px solid rgba(248,81,73,.35)}
