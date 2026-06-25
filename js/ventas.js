@@ -14,10 +14,10 @@ async function cargarVentas() {
     if (buscar) q = q.or(`asunto.ilike.%${buscar}%,remitente_email.ilike.%${buscar}%`);
     const [{ data, error }, colabRes] = await Promise.all([
       q,
-      _sb.from('bib_colaboradores').select('correo')
+      _sb.from('bib_colaboradores_correos').select('email')
     ]);
     if (error) throw error;
-    const emailsColab = new Set((colabRes.data || []).map(c => (c.correo || '').trim().toLowerCase()));
+    const emailsColab = new Set((colabRes.data || []).map(c => (c.email || '').trim().toLowerCase()));
     let rows = data || [];
     if (_filtroVentas === 'cancelado') {
       rows = rows.filter(r => r.estado === 'cancelado');
