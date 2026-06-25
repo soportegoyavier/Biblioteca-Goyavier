@@ -12,8 +12,12 @@ async function cargarVentas() {
       .gte('fecha_recepcion', p1).lt('fecha_recepcion', p2)
       .order('fecha_recepcion', { ascending: false });
     if (buscar) q = q.or(`asunto.ilike.%${buscar}%,remitente_email.ilike.%${buscar}%`);
-    const { data, error } = await q;
+    const [{ data, error }, colabRes] = await Promise.all([
+      q,
+      _sb.from('bib_colaboradores').select('correo')
+    ]);
     if (error) throw error;
+    const emailsColab = new Set((colabRes.data || []).map(c => (c.correo || '').trim().toLowerCase()));
     let rows = data || [];
     if (_filtroVentas === 'cancelado') {
       rows = rows.filter(r => r.estado === 'cancelado');
@@ -23,14 +27,14 @@ async function cargarVentas() {
       else if (_filtroVentas === 'deuda')  rows = rows.filter(r => (r.bib_trabajos_personal||[]).length && (r.bib_trabajos_personal||[]).reduce((a,t) => a+(t.precio_total-t.valor_pagado),0) > 0.005);
       else if (_filtroVentas === 'pagado') rows = rows.filter(r => (r.bib_trabajos_personal||[]).length && (r.bib_trabajos_personal||[]).reduce((a,t) => a+(t.precio_total-t.valor_pagado),0) <= 0.005);
     }
-    renderVentas(rows);
+    renderVentas(rows, emailsColab);
     _actualizarBadgeVentas(rows);
   } catch(e) {
     el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p>${e.message}</p></div>`;
   }
 }
 
-function renderVentas(rows) {
+function renderVentas(rows, emailsColab) {
   const el = document.getElementById('ventas-list');
   if (!rows.length) {
     el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-inbox"></i></div><p>Sin solicitudes personales en ${MESES[_mes]} ${_ano}</p></div>`;
@@ -56,18 +60,34 @@ function renderVentas(rows) {
       </div>` : '';
     const cancelVtBtn = !esCancelado ? `<button class="btn btn-danger-sm" onclick="event.stopPropagation();abrirModalCancelar(${r.id},'ventas')" title="Cancelar solicitud"><i class="fa fa-ban fa-xs"></i></button>` : '';
     const elimVtBtn   = `<button class="btn btn-danger" onclick="event.stopPropagation();abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>`;
+    const esColab     = emailsColab && emailsColab.has((r.remitente_email||'').trim().toLowerCase());
+    const moverBtn    = esColab && !esCancelado ? `<button class="btn btn-mover-inst" onclick="event.stopPropagation();reclasificarComoInstitucional(${r.id})" title="Mover a Gestión de Copias (es colaborador/profe)"><i class="fa fa-arrow-right-to-bracket fa-xs"></i></button>` : '';
     return `<div class="vt-card" ${!esCancelado ? `onclick="abrirModalPersonal(${r.id})"` : 'style="opacity:.65;cursor:default"'}>
       <div class="vt-top">
         <div class="vt-info">
           <div class="vt-email">${r.remitente_email}</div>
           <div class="vt-date">${fmtFecha(r.fecha_recepcion)}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${cancelVtBtn}${elimVtBtn}</div>
+        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${moverBtn}${cancelVtBtn}${elimVtBtn}</div>
       </div>
       <div class="vt-asunto">${r.asunto||'—'}</div>
       ${finHtml}
     </div>`;
   }).join('');
+}
+
+async function reclasificarComoInstitucional(solicitudId) {
+  if (!confirm('¿Mover esta solicitud a Gestión de Copias como institucional?')) return;
+  try {
+    const { error } = await _sb.from('bib_solicitudes')
+      .update({ tipo_remitente: 'institucional' })
+      .eq('id', solicitudId);
+    if (error) throw error;
+    toast('Solicitud movida a Gestión de Copias', 'success');
+    cargarVentas();
+  } catch(e) {
+    toast('Error al reclasificar: ' + e.message, 'error');
+  }
 }
 
 function _actualizarBadgeVentas(rows) {
