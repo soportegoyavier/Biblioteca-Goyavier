@@ -576,6 +576,7 @@ async function verDetalle(id) {
           </div>
           <div class="adj-actions">
             ${url ? `<button class="adj-btn view" data-url="${escHtml(url)}" data-mime="${escHtml(d.tipo_mime||'application/pdf')}" onclick="verArchivo(this.dataset.url,this.dataset.mime)"><i class="fa fa-eye fa-sm"></i></button><a class="adj-btn dl" href="${escHtml(url)}&download=${encodeURIComponent(d.nombre_archivo||'archivo')}" target="_blank"><i class="fa fa-download fa-sm"></i></a>`
+                  : d.drive_link ? `<a class="adj-btn view" href="${escHtml(d.drive_link)}" target="_blank" title="Abrir en Google Drive"><i class="fa fa-brands fa-google-drive fa-sm"></i></a>`
                   : '<span style="font-size:11px;color:var(--dim)">Sin archivo</span>'}
           </div>
         </div>`;
