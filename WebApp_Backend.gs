@@ -246,13 +246,64 @@ function sincronizarCorreos(params) {
       adjMeta.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: bytes.length, path: path });
     }
 
-    // ← PARALELO: todos los adjuntos del mensaje en una sola llamada
+    // Detectar archivos de Drive compartidos en el cuerpo (no adjuntos MIME)
+    var driveLinks = _extraerLinksDrive(item.msg.getBody());
+    var driveAdjMeta = [];
+    var driveUpReqs  = [];
+    for (var d = 0; d < driveLinks.length; d++) {
+      var dl = driveLinks[d];
+      try {
+        var driveFile = DriveApp.getFileById(dl.id);
+        var dNom  = driveFile.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
+        var dMime = driveFile.getMimeType();
+        var dPath = item.msgId + "/drive_" + dl.id + "_" + dNom;
+        var dEpth = dPath.split("/").map(encodeURIComponent).join("/");
+        var dBytes;
+        // Exportar Google Docs/Sheets/Slides como PDF; el resto descargar directo
+        if (dMime === 'application/vnd.google-apps.document') {
+          dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
+        } else if (dMime === 'application/vnd.google-apps.spreadsheet') {
+          dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
+        } else if (dMime === 'application/vnd.google-apps.presentation') {
+          dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
+        } else {
+          dBytes = driveFile.getBlob().getBytes();
+        }
+        driveUpReqs.push({
+          url: SUPABASE_URL + "/storage/v1/object/biblioteca-adjuntos/" + dEpth,
+          method: "POST",
+          headers: { "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": dMime, "x-upsert": "true" },
+          payload: dBytes,
+          muteHttpExceptions: true
+        });
+        driveAdjMeta.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dBytes.length, path: dPath, drive_id: dl.id });
+      } catch(e) {
+        // Archivo no accesible: guardar solo referencia con drive_link
+        driveAdjMeta.push({ nombre_archivo: dl.nombre || ('Drive: ' + dl.id), tipo_mime: 'application/octet-stream', tamano_bytes: 0, path: null, drive_link: dl.url });
+        driveUpReqs.push(null);
+        Logger.log('Drive no accesible ' + dl.id + ': ' + e.message);
+      }
+    }
+    var driveUpResp = driveUpReqs.filter(Boolean).length
+      ? UrlFetchApp.fetchAll(driveUpReqs.filter(Boolean))
+      : [];
+    var driveUpIdx = 0;
+    var driveResultados = driveAdjMeta.map(function(meta) {
+      if (meta.drive_link) return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: 0, storage_path: null, drive_link: meta.drive_link };
+      var ok = driveUpResp[driveUpIdx] && driveUpResp[driveUpIdx].getResponseCode() < 400;
+      driveUpIdx++;
+      return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
+    });
+
+    // ← PARALELO: todos los adjuntos MIME del mensaje en una sola llamada
     var upResp = uploadReqs.length ? UrlFetchApp.fetchAll(uploadReqs) : [];
 
-    item._docs = adjMeta.map(function(meta, idx) {
+    var mimeResultados = adjMeta.map(function(meta, idx) {
       var ok = upResp[idx] && upResp[idx].getResponseCode() < 400;
       return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
     });
+
+    item._docs = mimeResultados.concat(driveResultados);
   }
 
   // ── 5. Insertar solicitudes en un único batch POST ────────────
@@ -1039,4 +1090,36 @@ function _notificarError(contexto, msg) {
   if (!emailDest) return;
   GmailApp.sendEmail(emailDest, 'ERROR Reporte Biblioteca: ' + contexto,
     'Error:\n\n' + msg, { name: 'Biblioteca Goyavier' });
+}
+
+// ── Extrae links de Drive del cuerpo HTML de un email ────────
+// Retorna array de { id, url, nombre } sin duplicados
+function _extraerLinksDrive(htmlBody) {
+  if (!htmlBody) return [];
+  var resultados = [];
+  var vistos = {};
+  // Patrones: /file/d/ID, /folders/ID, open?id=ID, /d/ID/edit|view|preview
+  var patrones = [
+    /https?:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_\-]{10,})/g,
+    /https?:\/\/drive\.google\.com\/open\?id=([a-zA-Z0-9_\-]{10,})/g,
+    /https?:\/\/docs\.google\.com\/(?:document|spreadsheets|presentation|forms|drawings)\/d\/([a-zA-Z0-9_\-]{10,})/g,
+    /https?:\/\/drive\.google\.com\/(?:a\/[^\/]+\/)?uc\?(?:[^"]*&)?id=([a-zA-Z0-9_\-]{10,})/g
+  ];
+  // Intentar extraer nombre del title attr o texto adyacente al link
+  var nombreRe = /title="([^"]{1,120})"/;
+  patrones.forEach(function(re) {
+    var m;
+    re.lastIndex = 0;
+    while ((m = re.exec(htmlBody)) !== null) {
+      var id  = m[1];
+      var url = m[0];
+      if (vistos[id]) continue;
+      vistos[id] = true;
+      // Buscar nombre en los ~200 chars alrededor del match
+      var ctx   = htmlBody.substring(Math.max(0, m.index - 100), m.index + 200);
+      var nMatch = nombreRe.exec(ctx);
+      resultados.push({ id: id, url: url, nombre: nMatch ? nMatch[1] : null });
+    }
+  });
+  return resultados;
 }
