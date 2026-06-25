@@ -1145,7 +1145,12 @@ function _reprocesarMensaje(msg, _url, _key, listaBlanca) {
   if (!Array.isArray(insertRes) || !insertRes[0]) throw new Error('Error insertando solicitud: ' + JSON.stringify(insertRes));
   var newSolId = insertRes[0].id;
   if (docs.length) {
-    sbPostBatch(_url, _key, 'bib_documentos', docs.map(function(d){ return Object.assign({solicitud_id:newSolId}, d); }));
+    var docRes = sbPostBatch(_url, _key, 'bib_documentos', docs.map(function(d){ return Object.assign({solicitud_id:newSolId}, d); }));
+    if (docRes && docRes.error) {
+      Logger.log('ERROR bib_documentos insert: ' + JSON.stringify(docRes.error));
+    } else {
+      Logger.log('Docs insertados: ' + (Array.isArray(docRes) ? docRes.length : '?'));
+    }
   }
   Logger.log('LISTO: id=' + newSolId + ' tipo=' + tipoRemitente + ' | ' + docs.length + ' archivos');
   return { ok:true, solId:newSolId, docs:docs.length };
