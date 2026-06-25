@@ -1168,25 +1168,46 @@ function _procesarAdjuntos(adjuntos, msgId, maxBytes, supabaseUrl, supabaseKey) 
   return docs;
 }
 
-// ── Diagnóstico: ejecutar con el gmail_message_id del correo problemático ──
-// Ejemplo: diagnosticarCorreo("19efed757711dbae")
+// ── Diagnóstico: solicitudes sin documentos ───────────────────
+function diagnosticarSinAdjuntos() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  // Solicitudes que no tienen ningún documento asociado
+  var sols = sbGet(_url, _key,
+    'bib_solicitudes?select=id,gmail_message_id,asunto,remitente_email' +
+    '&not.bib_documentos.id=is.null' +
+    '&order=fecha_recepcion.desc&limit=20');
+  // Alternativa: buscar solicitudes recientes y cruzar con docs
+  var recientes = sbGet(_url, _key,
+    'bib_solicitudes?select=id,gmail_message_id,asunto,remitente_email,fecha_recepcion' +
+    '&order=fecha_recepcion.desc&limit=30');
+  if (!Array.isArray(recientes)) { Logger.log('Error: ' + JSON.stringify(recientes)); return; }
+  recientes.forEach(function(s) {
+    var docs = sbGet(_url, _key, 'bib_documentos?solicitud_id=eq.' + s.id + '&select=id');
+    var nDocs = Array.isArray(docs) ? docs.length : '?';
+    Logger.log('[' + nDocs + ' docs] ' + s.gmail_message_id + ' | ' + s.remitente_email + ' | ' + s.asunto);
+    if (nDocs === 0) diagnosticarCorreo(s.gmail_message_id);
+  });
+}
+
+// ── Diagnóstico: inspeccionar adjuntos de un mensaje Gmail ────
 function diagnosticarCorreo(msgId) {
-  var msg = GmailApp.getMessageById(msgId || '19efed757711dbae');
-  if (!msg) { Logger.log('Mensaje no encontrado'); return; }
-  Logger.log('De: ' + msg.getFrom());
-  Logger.log('Asunto: ' + msg.getSubject());
+  if (!msgId) { Logger.log('Requiere gmail_message_id'); return; }
+  var msg = GmailApp.getMessageById(msgId);
+  if (!msg) { Logger.log('Mensaje no encontrado: ' + msgId); return; }
+  Logger.log('=== ' + msgId);
+  Logger.log('De: ' + msg.getFrom() + ' | Asunto: ' + msg.getSubject());
 
   var a1 = msg.getAttachments();
   Logger.log('getAttachments() sin opciones: ' + a1.length + ' items');
-  a1.forEach(function(a){ Logger.log('  - ' + a.getName() + ' | ' + a.getContentType() + ' | ' + a.getSize() + ' bytes'); });
+  a1.forEach(function(a){ Logger.log('  MIME - ' + a.getName() + ' | ' + a.getContentType() + ' | ' + a.getSize() + 'b'); });
 
   var a2 = msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
   Logger.log('getAttachments({includeGoogleDriveFiles:true}): ' + a2.length + ' items');
-  a2.forEach(function(a){ Logger.log('  - ' + a.getName() + ' | ' + a.getContentType() + ' | ' + a.getSize() + ' bytes'); });
+  a2.forEach(function(a){ Logger.log('  GDrive - ' + a.getName() + ' | ' + a.getContentType() + ' | ' + a.getSize() + 'b'); });
 
   var links = _extraerLinksDrive(msg.getBody());
   Logger.log('Links Drive en HTML body: ' + links.length);
-  links.forEach(function(l){ Logger.log('  - id=' + l.id + ' nombre=' + l.nombre); });
+  links.forEach(function(l){ Logger.log('  LINK - id=' + l.id + ' nombre=' + l.nombre + ' url=' + l.url.substring(0,60)); });
 }
 
 // ── Extrae links de Drive del cuerpo HTML de un email ────────
