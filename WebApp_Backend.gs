@@ -223,7 +223,7 @@ function sincronizarCorreos(params) {
   }
 
   // ── 4. Adjuntos: uno por uno para evitar OOM con archivos grandes ──
-  var MAX_BYTES_SYNC = 15 * 1024 * 1024; // 15 MB por archivo
+  var MAX_BYTES_SYNC = 40 * 1024 * 1024; // 40 MB por archivo (UrlFetchApp soporta hasta 50MB)
   for (var n = 0; n < nuevos.length; n++) {
     var item     = nuevos[n];
     var adjuntos = item.msg.getAttachments();
@@ -1094,7 +1094,7 @@ function reprocesarUltimoCorreo() {
 function reprocesarCorreo(gmailMsgId) {
   var _url = _cfg('SUPABASE_URL');
   var _key = _cfg('SUPABASE_KEY');
-  var MAX_BYTES = 15 * 1024 * 1024; // 15 MB por archivo — evita OOM
+  var MAX_BYTES = 40 * 1024 * 1024; // 40 MB por archivo (UrlFetchApp soporta hasta 50MB)
   if (!gmailMsgId) throw new Error('gmailMsgId requerido');
 
   var res = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id,asunto,remitente_email');
