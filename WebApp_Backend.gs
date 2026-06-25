@@ -1145,7 +1145,18 @@ function _reprocesarMensaje(msg, _url, _key, listaBlanca) {
   if (!Array.isArray(insertRes) || !insertRes[0]) throw new Error('Error insertando solicitud: ' + JSON.stringify(insertRes));
   var newSolId = insertRes[0].id;
   if (docs.length) {
-    var docRes = sbPostBatch(_url, _key, 'bib_documentos', docs.map(function(d){ return Object.assign({solicitud_id:newSolId}, d); }));
+    // Normalizar: todas las filas deben tener las mismas claves (PostgREST PGRST102)
+    var docRows = docs.map(function(d) {
+      return {
+        solicitud_id:   newSolId,
+        nombre_archivo: d.nombre_archivo || null,
+        tipo_mime:      d.tipo_mime      || null,
+        tamano_bytes:   d.tamano_bytes   || 0,
+        storage_path:   d.storage_path   || null,
+        drive_link:     d.drive_link     || null
+      };
+    });
+    var docRes = sbPostBatch(_url, _key, 'bib_documentos', docRows);
     if (docRes && docRes.error) {
       Logger.log('ERROR bib_documentos insert: ' + JSON.stringify(docRes.error));
     } else {
