@@ -1187,9 +1187,8 @@ function reprocesarCorreo(gmailMsgId) {
   var fromRaw    = msg.getFrom();
   var emMatch    = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(fromRaw);
   var emailRemit = emMatch ? emMatch[0].toLowerCase() : fromRaw;
-  var tipoRemitente = 'externo';
   var colRes = sbGet(_url, _key, 'bib_colaboradores?correo=eq.' + encodeURIComponent(emailRemit) + '&select=tipo');
-  if (Array.isArray(colRes) && colRes[0]) tipoRemitente = colRes[0].tipo || 'colaborador';
+  var tipoRemitente = (Array.isArray(colRes) && colRes[0] && colRes[0].tipo) ? colRes[0].tipo : 'personal';
 
   var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [{
     gmail_message_id: gmailMsgId,
