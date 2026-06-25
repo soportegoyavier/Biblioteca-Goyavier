@@ -226,9 +226,14 @@ function sincronizarCorreos(params) {
   var MAX_BYTES_SYNC = 40 * 1024 * 1024; // 40 MB por archivo (UrlFetchApp soporta hasta 50MB)
   for (var n = 0; n < nuevos.length; n++) {
     var item     = nuevos[n];
-    // includeGoogleDriveFiles:true captura archivos compartidos via botón Drive de Gmail
+    // 1. Adjuntos MIME + Drive adjuntos con botón nativo de Gmail
     var adjuntos = item.msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
     var itemDocs = _procesarAdjuntos(adjuntos, item.msgId, MAX_BYTES_SYNC, SUPABASE_URL, SUPABASE_KEY);
+    // 2. Links Drive en el cuerpo HTML (archivos compartidos como enlace)
+    var driveLinks = _extraerLinksDrive(item.msg.getBody());
+    if (driveLinks.length) {
+      itemDocs = itemDocs.concat(_procesarDriveLinks(driveLinks, item.msgId, MAX_BYTES_SYNC, SUPABASE_URL, SUPABASE_KEY));
+    }
     item._docs = itemDocs;
   }
 
@@ -1068,6 +1073,13 @@ function reprocesarDesde(fechaStr) {
     for (var m = 0; m < msgs.length; m++) {
       var msg = msgs[m];
       var msgId = msg.getId();
+      // Filtrar: solo procesar remitentes autorizados
+      var fromMatch = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(msg.getFrom());
+      var fromEmail = fromMatch ? fromMatch[0].toLowerCase() : '';
+      if (!lb[fromEmail]) {
+        Logger.log('OMITIDO (no autorizado): ' + fromEmail + ' | ' + msg.getSubject());
+        continue;
+      }
       try {
         // Borrar solicitud existente si la hay
         var ex = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(msgId) + '&select=id');
@@ -1104,9 +1116,14 @@ function _reprocesarMensaje(msg, _url, _key, listaBlanca) {
   var MAX_BYTES  = 40 * 1024 * 1024;
   var gmailMsgId = msg.getId();
 
-  // includeGoogleDriveFiles:true captura archivos del botón Drive de Gmail
+  // 1. Adjuntos MIME + archivos Drive adjuntos con el botón nativo de Gmail
   var adjuntos = msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
   var docs = _procesarAdjuntos(adjuntos, gmailMsgId, MAX_BYTES, _url, _key);
+
+  // 2. Links de Drive en el cuerpo HTML (archivos compartidos como enlace, no adjuntos)
+  var driveLinks = _extraerLinksDrive(msg.getBody());
+  var docsDrive  = _procesarDriveLinks(driveLinks, gmailMsgId, MAX_BYTES, _url, _key);
+  docs = docs.concat(docsDrive);
 
   // Clasificar con listaBlanca (igual que sincronizarCorreos)
   var fromRaw    = msg.getFrom();
@@ -1208,6 +1225,47 @@ function diagnosticarCorreo(msgId) {
   var links = _extraerLinksDrive(msg.getBody());
   Logger.log('Links Drive en HTML body: ' + links.length);
   links.forEach(function(l){ Logger.log('  LINK - id=' + l.id + ' nombre=' + l.nombre + ' url=' + l.url.substring(0,60)); });
+}
+
+// ── Descarga y sube archivos referenciados como links Drive ──
+function _procesarDriveLinks(driveLinks, msgId, maxBytes, supabaseUrl, supabaseKey) {
+  var docs = [];
+  for (var d = 0; d < driveLinks.length; d++) {
+    var dl = driveLinks[d];
+    try {
+      var df   = DriveApp.getFileById(dl.id);
+      var dNom = df.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
+      var dMime= df.getMimeType();
+      var dSz  = df.getSize();
+      var isGApp = dMime.indexOf('application/vnd.google-apps.') === 0;
+      if (!isGApp && dSz > maxBytes) {
+        docs.push({ nombre_archivo: df.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
+        Logger.log('Drive link omitido (>' + Math.round(dSz/1024/1024) + 'MB): ' + df.getName());
+        continue;
+      }
+      var dBytes;
+      if (dMime==='application/vnd.google-apps.document'||dMime==='application/vnd.google-apps.spreadsheet'||dMime==='application/vnd.google-apps.presentation') {
+        dBytes = df.getAs('application/pdf').getBytes(); dMime='application/pdf'; dNom=dNom+'.pdf';
+      } else {
+        dBytes = df.getBlob().getBytes();
+      }
+      var dPath = msgId + "/drive_" + dl.id + "_" + dNom;
+      var dResp = UrlFetchApp.fetch(supabaseUrl + "/storage/v1/object/biblioteca-adjuntos/" + dPath.split("/").map(encodeURIComponent).join("/"), {
+        method:"POST", muteHttpExceptions:true,
+        headers:{"Authorization":"Bearer "+supabaseKey,"Content-Type":dMime,"x-upsert":"true"},
+        payload:dBytes
+      });
+      dBytes = null;
+      var ok = dResp.getResponseCode() < 400;
+      docs.push({ nombre_archivo: df.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: ok ? dPath : null });
+      Logger.log('Drive link ' + (ok?'OK':'ERROR upload') + ': ' + df.getName());
+    } catch(e) {
+      // No accesible: guardar solo el link para referencia
+      docs.push({ nombre_archivo: dl.nombre || ('Drive: '+dl.id), tipo_mime:'application/octet-stream', tamano_bytes:0, storage_path:null, drive_link:dl.url });
+      Logger.log('Drive link no accesible ' + dl.id + ': ' + e.message);
+    }
+  }
+  return docs;
 }
 
 // ── Extrae links de Drive del cuerpo HTML de un email ────────
