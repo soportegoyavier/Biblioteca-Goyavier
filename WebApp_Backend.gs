@@ -222,88 +222,73 @@ function sincronizarCorreos(params) {
     return { ok: true, agregados: 0, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: hayMas, nextOffset: nextOffset, ms: Date.now()-t0 };
   }
 
-  // ── 4. Adjuntos: leer bytes y subir EN PARALELO por mensaje ──
+  // ── 4. Adjuntos: uno por uno para evitar OOM con archivos grandes ──
+  var MAX_BYTES_SYNC = 15 * 1024 * 1024; // 15 MB por archivo
   for (var n = 0; n < nuevos.length; n++) {
     var item     = nuevos[n];
     var adjuntos = item.msg.getAttachments();
-    var uploadReqs  = [];
-    var adjMeta     = [];
+    var itemDocs = [];
 
+    // Adjuntos MIME — secuencial
     for (var a = 0; a < adjuntos.length; a++) {
-      var att   = adjuntos[a];
-      var nom   = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
-      var mime  = att.getContentType();
+      var att  = adjuntos[a];
+      var nom  = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
+      var mime = att.getContentType();
+      var sz   = att.getSize();
+      if (sz > MAX_BYTES_SYNC) {
+        itemDocs.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: sz, storage_path: null });
+        continue;
+      }
       var bytes = att.getBytes();
       var path  = item.msgId + "/" + nom;
       var epth  = path.split("/").map(encodeURIComponent).join("/");
-      uploadReqs.push({
-        url: SUPABASE_URL + "/storage/v1/object/biblioteca-adjuntos/" + epth,
-        method: "POST",
+      var resp  = UrlFetchApp.fetch(SUPABASE_URL + "/storage/v1/object/biblioteca-adjuntos/" + epth, {
+        method: "POST", muteHttpExceptions: true,
         headers: { "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": mime || "application/octet-stream", "x-upsert": "true" },
-        payload: bytes,
-        muteHttpExceptions: true
+        payload: bytes
       });
-      adjMeta.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: bytes.length, path: path });
+      bytes = null;
+      itemDocs.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: sz, storage_path: resp.getResponseCode() < 400 ? path : null });
     }
 
-    // Detectar archivos de Drive compartidos en el cuerpo (no adjuntos MIME)
+    // Drive links en el cuerpo — secuencial
     var driveLinks = _extraerLinksDrive(item.msg.getBody());
-    var driveAdjMeta = [];
-    var driveUpReqs  = [];
     for (var d = 0; d < driveLinks.length; d++) {
       var dl = driveLinks[d];
       try {
         var driveFile = DriveApp.getFileById(dl.id);
         var dNom  = driveFile.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
         var dMime = driveFile.getMimeType();
-        var dPath = item.msgId + "/drive_" + dl.id + "_" + dNom;
-        var dEpth = dPath.split("/").map(encodeURIComponent).join("/");
+        var dSz   = driveFile.getSize();
+        var isGApp = dMime.indexOf('application/vnd.google-apps.') === 0;
+        if (!isGApp && dSz > MAX_BYTES_SYNC) {
+          itemDocs.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
+          continue;
+        }
         var dBytes;
-        // Exportar Google Docs/Sheets/Slides como PDF; el resto descargar directo
-        if (dMime === 'application/vnd.google-apps.document') {
-          dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
-        } else if (dMime === 'application/vnd.google-apps.spreadsheet') {
-          dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
-        } else if (dMime === 'application/vnd.google-apps.presentation') {
+        if (dMime === 'application/vnd.google-apps.document' ||
+            dMime === 'application/vnd.google-apps.spreadsheet' ||
+            dMime === 'application/vnd.google-apps.presentation') {
           dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
         } else {
           dBytes = driveFile.getBlob().getBytes();
         }
-        driveUpReqs.push({
-          url: SUPABASE_URL + "/storage/v1/object/biblioteca-adjuntos/" + dEpth,
-          method: "POST",
+        var dPath = item.msgId + "/drive_" + dl.id + "_" + dNom;
+        var dEpth = dPath.split("/").map(encodeURIComponent).join("/");
+        var dResp = UrlFetchApp.fetch(SUPABASE_URL + "/storage/v1/object/biblioteca-adjuntos/" + dEpth, {
+          method: "POST", muteHttpExceptions: true,
           headers: { "Authorization": "Bearer " + SUPABASE_KEY, "Content-Type": dMime, "x-upsert": "true" },
-          payload: dBytes,
-          muteHttpExceptions: true
+          payload: dBytes
         });
-        driveAdjMeta.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dBytes.length, path: dPath, drive_id: dl.id });
+        dBytes = null;
+        itemDocs.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: dResp.getResponseCode() < 400 ? dPath : null });
       } catch(e) {
-        // Archivo no accesible: guardar solo referencia con drive_link
-        driveAdjMeta.push({ nombre_archivo: dl.nombre || ('Drive: ' + dl.id), tipo_mime: 'application/octet-stream', tamano_bytes: 0, path: null, drive_link: dl.url });
-        driveUpReqs.push(null);
+        itemDocs.push({ nombre_archivo: dl.nombre || ('Drive: ' + dl.id), tipo_mime: 'application/octet-stream', tamano_bytes: 0, storage_path: null, drive_link: dl.url });
         Logger.log('Drive no accesible ' + dl.id + ': ' + e.message);
       }
     }
-    var driveUpResp = driveUpReqs.filter(Boolean).length
-      ? UrlFetchApp.fetchAll(driveUpReqs.filter(Boolean))
-      : [];
-    var driveUpIdx = 0;
-    var driveResultados = driveAdjMeta.map(function(meta) {
-      if (meta.drive_link) return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: 0, storage_path: null, drive_link: meta.drive_link };
-      var ok = driveUpResp[driveUpIdx] && driveUpResp[driveUpIdx].getResponseCode() < 400;
-      driveUpIdx++;
-      return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
-    });
 
-    // ← PARALELO: todos los adjuntos MIME del mensaje en una sola llamada
-    var upResp = uploadReqs.length ? UrlFetchApp.fetchAll(uploadReqs) : [];
-
-    var mimeResultados = adjMeta.map(function(meta, idx) {
-      var ok = upResp[idx] && upResp[idx].getResponseCode() < 400;
-      return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
-    });
-
-    item._docs = mimeResultados.concat(driveResultados);
+    item._docs = itemDocs;
   }
 
   // ── 5. Insertar solicitudes en un único batch POST ────────────
@@ -1109,60 +1094,70 @@ function reprocesarUltimoCorreo() {
 function reprocesarCorreo(gmailMsgId) {
   var _url = _cfg('SUPABASE_URL');
   var _key = _cfg('SUPABASE_KEY');
+  var MAX_BYTES = 15 * 1024 * 1024; // 15 MB por archivo — evita OOM
   if (!gmailMsgId) throw new Error('gmailMsgId requerido');
 
-  // Obtener la solicitud existente para tener su id de Supabase
   var res = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id,asunto,remitente_email');
   if (!Array.isArray(res) || !res[0]) throw new Error('No se encontró solicitud con gmail_message_id=' + gmailMsgId);
   var solId = res[0].id;
   Logger.log('Solicitud encontrada: id=' + solId + ' | ' + res[0].remitente_email + ' | ' + res[0].asunto);
 
-  // Borrar documentos y luego la solicitud (ON DELETE CASCADE puede no estar activo)
-  var delDocs = UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + solId, {
+  UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + solId, {
     method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true
   });
-  Logger.log('Docs borrados: ' + delDocs.getResponseCode());
-  var delSol = UrlFetchApp.fetch(_url + '/rest/v1/bib_solicitudes?id=eq.' + solId, {
+  UrlFetchApp.fetch(_url + '/rest/v1/bib_solicitudes?id=eq.' + solId, {
     method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true
   });
-  Logger.log('Solicitud borrada: ' + delSol.getResponseCode());
+  Logger.log('Registro anterior eliminado');
 
-  // Obtener el mensaje de Gmail y reprocesarlo
   var msg = GmailApp.getMessageById(gmailMsgId);
   if (!msg) throw new Error('Mensaje no encontrado en Gmail: ' + gmailMsgId);
 
-  // --- Adjuntos MIME normales ---
-  var adjuntos   = msg.getAttachments();
-  var uploadReqs = [];
-  var adjMeta    = [];
+  var docs = [];
+
+  // --- Adjuntos MIME: uno por uno para no acumular en memoria ---
+  var adjuntos = msg.getAttachments();
   for (var a = 0; a < adjuntos.length; a++) {
     var att  = adjuntos[a];
     var nom  = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
     var mime = att.getContentType();
-    var bytes= att.getBytes();
-    var path = gmailMsgId + "/" + nom;
-    var epth = path.split("/").map(encodeURIComponent).join("/");
-    uploadReqs.push({
-      url: _url + "/storage/v1/object/biblioteca-adjuntos/" + epth,
+    var sz   = att.getSize();
+    if (sz > MAX_BYTES) {
+      Logger.log('MIME omitido (>' + Math.round(sz/1024/1024) + 'MB): ' + att.getName());
+      docs.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: sz, storage_path: null });
+      continue;
+    }
+    var bytes = att.getBytes();
+    var path  = gmailMsgId + "/" + nom;
+    var epth  = path.split("/").map(encodeURIComponent).join("/");
+    var resp  = UrlFetchApp.fetch(_url + "/storage/v1/object/biblioteca-adjuntos/" + epth, {
       method: "POST", muteHttpExceptions: true,
       headers: { "Authorization": "Bearer " + _key, "Content-Type": mime || "application/octet-stream", "x-upsert": "true" },
       payload: bytes
     });
-    adjMeta.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: bytes.length, path: path });
+    bytes = null; // liberar referencia
+    var ok = resp.getResponseCode() < 400;
+    docs.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: sz, storage_path: ok ? path : null });
+    Logger.log('MIME ' + (ok?'OK':'ERROR') + ': ' + att.getName());
   }
 
-  // --- Adjuntos Drive en el cuerpo ---
-  var driveLinks   = _extraerLinksDrive(msg.getBody());
-  var driveUpReqs  = [];
-  var driveAdjMeta = [];
+  // --- Drive links: uno por uno ---
+  var driveLinks = _extraerLinksDrive(msg.getBody());
+  Logger.log('Links Drive encontrados: ' + driveLinks.length);
   for (var d = 0; d < driveLinks.length; d++) {
     var dl = driveLinks[d];
     try {
       var driveFile = DriveApp.getFileById(dl.id);
       var dNom  = driveFile.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
       var dMime = driveFile.getMimeType();
-      var dPath = gmailMsgId + "/drive_" + dl.id + "_" + dNom;
-      var dEpth = dPath.split("/").map(encodeURIComponent).join("/");
+      var dSz   = driveFile.getSize();
+      var isGoogleType = dMime.indexOf('application/vnd.google-apps.') === 0;
+      // Google Docs/Sheets/Slides no tienen tamaño real reportado; los exportamos si < 30MB estimado
+      if (!isGoogleType && dSz > MAX_BYTES) {
+        Logger.log('Drive omitido (>' + Math.round(dSz/1024/1024) + 'MB): ' + driveFile.getName());
+        docs.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
+        continue;
+      }
       var dBytes;
       if (dMime === 'application/vnd.google-apps.document' ||
           dMime === 'application/vnd.google-apps.spreadsheet' ||
@@ -1171,47 +1166,32 @@ function reprocesarCorreo(gmailMsgId) {
       } else {
         dBytes = driveFile.getBlob().getBytes();
       }
-      driveUpReqs.push({
-        url: _url + "/storage/v1/object/biblioteca-adjuntos/" + dEpth,
+      var dPath = gmailMsgId + "/drive_" + dl.id + "_" + dNom;
+      var dEpth = dPath.split("/").map(encodeURIComponent).join("/");
+      var dResp = UrlFetchApp.fetch(_url + "/storage/v1/object/biblioteca-adjuntos/" + dEpth, {
         method: "POST", muteHttpExceptions: true,
         headers: { "Authorization": "Bearer " + _key, "Content-Type": dMime, "x-upsert": "true" },
         payload: dBytes
       });
-      driveAdjMeta.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dBytes.length, path: dPath });
-      Logger.log('Drive OK: ' + driveFile.getName());
+      dBytes = null; // liberar referencia
+      var dOk = dResp.getResponseCode() < 400;
+      docs.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: dOk ? dPath : null });
+      Logger.log('Drive ' + (dOk?'OK':'ERROR') + ': ' + driveFile.getName());
     } catch(e) {
-      driveAdjMeta.push({ nombre_archivo: dl.nombre || ('Drive: ' + dl.id), tipo_mime: 'application/octet-stream', tamano_bytes: 0, path: null, drive_link: dl.url });
-      driveUpReqs.push(null);
       Logger.log('Drive no accesible ' + dl.id + ': ' + e.message);
+      docs.push({ nombre_archivo: dl.nombre || ('Drive: ' + dl.id), tipo_mime: 'application/octet-stream', tamano_bytes: 0, storage_path: null, drive_link: dl.url });
     }
   }
 
-  // Subir todo
-  var upResp = uploadReqs.length ? UrlFetchApp.fetchAll(uploadReqs) : [];
-  var driveUpResp = driveUpReqs.filter(Boolean).length ? UrlFetchApp.fetchAll(driveUpReqs.filter(Boolean)) : [];
-
-  var docs = adjMeta.map(function(meta, idx) {
-    var ok = upResp[idx] && upResp[idx].getResponseCode() < 400;
-    return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
-  });
-  var driveIdx = 0;
-  driveAdjMeta.forEach(function(meta) {
-    if (meta.drive_link) { docs.push({ nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: 0, storage_path: null, drive_link: meta.drive_link }); return; }
-    var ok = driveUpResp[driveIdx] && driveUpResp[driveIdx].getResponseCode() < 400;
-    driveIdx++;
-    docs.push({ nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null });
-  });
-
   // Reinsertar solicitud
-  var fromRaw  = msg.getFrom();
-  var emailRe  = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
-  var emMatch  = emailRe.exec(fromRaw);
+  var fromRaw    = msg.getFrom();
+  var emMatch    = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(fromRaw);
   var emailRemit = emMatch ? emMatch[0].toLowerCase() : fromRaw;
   var tipoRemitente = 'externo';
   var colRes = sbGet(_url, _key, 'bib_colaboradores?correo=eq.' + encodeURIComponent(emailRemit) + '&select=tipo');
   if (Array.isArray(colRes) && colRes[0]) tipoRemitente = colRes[0].tipo || 'colaborador';
 
-  var solRow = {
+  var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [{
     gmail_message_id: gmailMsgId,
     fecha_recepcion:  msg.getDate().toISOString(),
     remitente_nombre: fromRaw,
@@ -1221,21 +1201,14 @@ function reprocesarCorreo(gmailMsgId) {
     asunto:           msg.getSubject() || '(sin asunto)',
     cuerpo:           msg.getPlainBody().substring(0, 1000),
     estado:           'pendiente'
-  };
-  var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [solRow]);
+  }]);
   if (!Array.isArray(insertRes) || !insertRes[0]) throw new Error('Error insertando solicitud: ' + JSON.stringify(insertRes));
   var newSolId = insertRes[0].id;
-  Logger.log('Solicitud reinsertada con id=' + newSolId);
 
-  // Insertar documentos
   if (docs.length) {
-    var docRows = docs.map(function(d) {
-      return Object.assign({ solicitud_id: newSolId }, d);
-    });
-    sbPostBatch(_url, _key, 'bib_documentos', docRows);
-    Logger.log('Documentos insertados: ' + docs.length + ' (' + driveLinks.length + ' de Drive)');
+    sbPostBatch(_url, _key, 'bib_documentos', docs.map(function(d){ return Object.assign({ solicitud_id: newSolId }, d); }));
   }
-  Logger.log('LISTO: ' + docs.length + ' archivos totales (' + adjuntos.length + ' MIME + ' + driveLinks.length + ' Drive)');
+  Logger.log('LISTO: id=' + newSolId + ' | ' + docs.length + ' archivos (' + adjuntos.length + ' MIME + ' + driveLinks.length + ' Drive)');
   return { ok: true, solId: newSolId, docs: docs.length, drive: driveLinks.length };
 }
 
