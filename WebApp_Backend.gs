@@ -1168,6 +1168,27 @@ function _procesarAdjuntos(adjuntos, msgId, maxBytes, supabaseUrl, supabaseKey) 
   return docs;
 }
 
+// ── Diagnóstico: ejecutar con el gmail_message_id del correo problemático ──
+// Ejemplo: diagnosticarCorreo("19efed757711dbae")
+function diagnosticarCorreo(msgId) {
+  var msg = GmailApp.getMessageById(msgId || '19efed757711dbae');
+  if (!msg) { Logger.log('Mensaje no encontrado'); return; }
+  Logger.log('De: ' + msg.getFrom());
+  Logger.log('Asunto: ' + msg.getSubject());
+
+  var a1 = msg.getAttachments();
+  Logger.log('getAttachments() sin opciones: ' + a1.length + ' items');
+  a1.forEach(function(a){ Logger.log('  - ' + a.getName() + ' | ' + a.getContentType() + ' | ' + a.getSize() + ' bytes'); });
+
+  var a2 = msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
+  Logger.log('getAttachments({includeGoogleDriveFiles:true}): ' + a2.length + ' items');
+  a2.forEach(function(a){ Logger.log('  - ' + a.getName() + ' | ' + a.getContentType() + ' | ' + a.getSize() + ' bytes'); });
+
+  var links = _extraerLinksDrive(msg.getBody());
+  Logger.log('Links Drive en HTML body: ' + links.length);
+  links.forEach(function(l){ Logger.log('  - id=' + l.id + ' nombre=' + l.nombre); });
+}
+
 // ── Extrae links de Drive del cuerpo HTML de un email ────────
 // Retorna array de { id, url, nombre } sin duplicados
 function _extraerLinksDrive(htmlBody) {
