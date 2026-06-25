@@ -1054,7 +1054,7 @@ function reprocesarCorreo(gmailMsgId) {
 }
 
 // Atajo sin argumentos para ejecutar desde el editor GAS
-function reprocesarDesdeJunio24() { reprocesarDesde('2026/06/24'); }
+function reprocesarDesdeJunio24() { reprocesarDesde('2026/06/23'); }
 
 // Busca en Gmail desde fechaStr ("2026/06/24") y reprocesa TODOS,
 // incluyendo eliminados e ignorados — usa clasificación correcta via listaBlanca
