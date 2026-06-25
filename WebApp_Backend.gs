@@ -1130,8 +1130,8 @@ function _reprocesarMensaje(msg, _url, _key, listaBlanca) {
   if (docs.length) {
     sbPostBatch(_url, _key, 'bib_documentos', docs.map(function(d){ return Object.assign({solicitud_id:newSolId}, d); }));
   }
-  Logger.log('LISTO: id=' + newSolId + ' tipo=' + tipoRemitente + ' | ' + docs.length + ' archivos (' + adjuntos.length + ' MIME + ' + driveLinks.length + ' Drive)');
-  return { ok:true, solId:newSolId, docs:docs.length, drive:driveLinks.length };
+  Logger.log('LISTO: id=' + newSolId + ' tipo=' + tipoRemitente + ' | ' + docs.length + ' archivos');
+  return { ok:true, solId:newSolId, docs:docs.length };
 }
 
 // ── Sube adjuntos (MIME + Drive) uno por uno a Storage ───────
