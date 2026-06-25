@@ -1092,6 +1092,153 @@ function _notificarError(contexto, msg) {
     'Error:\n\n' + msg, { name: 'Biblioteca Goyavier' });
 }
 
+// ── Reprocesar un correo ya importado (re-detecta adjuntos Drive) ─
+// Uso: desde el editor GAS, ejecutar reprocesarUltimoCorreo()
+// O para un correo específico: reprocesarCorreo("GMAIL_MESSAGE_ID")
+function reprocesarUltimoCorreo() {
+  var _url = _cfg('SUPABASE_URL');
+  var _key = _cfg('SUPABASE_KEY');
+  // Obtener la solicitud más reciente
+  var res = sbGet(_url, _key, 'bib_solicitudes?order=fecha_recepcion.desc&limit=1&select=id,gmail_message_id,asunto,remitente_email');
+  if (!Array.isArray(res) || !res[0]) throw new Error('No hay solicitudes en la base de datos');
+  var sol = res[0];
+  Logger.log('Reprocesando: id=' + sol.id + ' | ' + sol.remitente_email + ' | ' + sol.asunto);
+  reprocesarCorreo(sol.gmail_message_id);
+}
+
+function reprocesarCorreo(gmailMsgId) {
+  var _url = _cfg('SUPABASE_URL');
+  var _key = _cfg('SUPABASE_KEY');
+  if (!gmailMsgId) throw new Error('gmailMsgId requerido');
+
+  // Obtener la solicitud existente para tener su id de Supabase
+  var res = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id,asunto,remitente_email');
+  if (!Array.isArray(res) || !res[0]) throw new Error('No se encontró solicitud con gmail_message_id=' + gmailMsgId);
+  var solId = res[0].id;
+  Logger.log('Solicitud encontrada: id=' + solId + ' | ' + res[0].remitente_email + ' | ' + res[0].asunto);
+
+  // Borrar documentos y luego la solicitud (ON DELETE CASCADE puede no estar activo)
+  var delDocs = UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + solId, {
+    method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true
+  });
+  Logger.log('Docs borrados: ' + delDocs.getResponseCode());
+  var delSol = UrlFetchApp.fetch(_url + '/rest/v1/bib_solicitudes?id=eq.' + solId, {
+    method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true
+  });
+  Logger.log('Solicitud borrada: ' + delSol.getResponseCode());
+
+  // Obtener el mensaje de Gmail y reprocesarlo
+  var msg = GmailApp.getMessageById(gmailMsgId);
+  if (!msg) throw new Error('Mensaje no encontrado en Gmail: ' + gmailMsgId);
+
+  // --- Adjuntos MIME normales ---
+  var adjuntos   = msg.getAttachments();
+  var uploadReqs = [];
+  var adjMeta    = [];
+  for (var a = 0; a < adjuntos.length; a++) {
+    var att  = adjuntos[a];
+    var nom  = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
+    var mime = att.getContentType();
+    var bytes= att.getBytes();
+    var path = gmailMsgId + "/" + nom;
+    var epth = path.split("/").map(encodeURIComponent).join("/");
+    uploadReqs.push({
+      url: _url + "/storage/v1/object/biblioteca-adjuntos/" + epth,
+      method: "POST", muteHttpExceptions: true,
+      headers: { "Authorization": "Bearer " + _key, "Content-Type": mime || "application/octet-stream", "x-upsert": "true" },
+      payload: bytes
+    });
+    adjMeta.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: bytes.length, path: path });
+  }
+
+  // --- Adjuntos Drive en el cuerpo ---
+  var driveLinks   = _extraerLinksDrive(msg.getBody());
+  var driveUpReqs  = [];
+  var driveAdjMeta = [];
+  for (var d = 0; d < driveLinks.length; d++) {
+    var dl = driveLinks[d];
+    try {
+      var driveFile = DriveApp.getFileById(dl.id);
+      var dNom  = driveFile.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
+      var dMime = driveFile.getMimeType();
+      var dPath = gmailMsgId + "/drive_" + dl.id + "_" + dNom;
+      var dEpth = dPath.split("/").map(encodeURIComponent).join("/");
+      var dBytes;
+      if (dMime === 'application/vnd.google-apps.document' ||
+          dMime === 'application/vnd.google-apps.spreadsheet' ||
+          dMime === 'application/vnd.google-apps.presentation') {
+        dBytes = driveFile.getAs('application/pdf').getBytes(); dMime = 'application/pdf'; dNom = dNom + '.pdf';
+      } else {
+        dBytes = driveFile.getBlob().getBytes();
+      }
+      driveUpReqs.push({
+        url: _url + "/storage/v1/object/biblioteca-adjuntos/" + dEpth,
+        method: "POST", muteHttpExceptions: true,
+        headers: { "Authorization": "Bearer " + _key, "Content-Type": dMime, "x-upsert": "true" },
+        payload: dBytes
+      });
+      driveAdjMeta.push({ nombre_archivo: driveFile.getName(), tipo_mime: dMime, tamano_bytes: dBytes.length, path: dPath });
+      Logger.log('Drive OK: ' + driveFile.getName());
+    } catch(e) {
+      driveAdjMeta.push({ nombre_archivo: dl.nombre || ('Drive: ' + dl.id), tipo_mime: 'application/octet-stream', tamano_bytes: 0, path: null, drive_link: dl.url });
+      driveUpReqs.push(null);
+      Logger.log('Drive no accesible ' + dl.id + ': ' + e.message);
+    }
+  }
+
+  // Subir todo
+  var upResp = uploadReqs.length ? UrlFetchApp.fetchAll(uploadReqs) : [];
+  var driveUpResp = driveUpReqs.filter(Boolean).length ? UrlFetchApp.fetchAll(driveUpReqs.filter(Boolean)) : [];
+
+  var docs = adjMeta.map(function(meta, idx) {
+    var ok = upResp[idx] && upResp[idx].getResponseCode() < 400;
+    return { nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null };
+  });
+  var driveIdx = 0;
+  driveAdjMeta.forEach(function(meta) {
+    if (meta.drive_link) { docs.push({ nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: 0, storage_path: null, drive_link: meta.drive_link }); return; }
+    var ok = driveUpResp[driveIdx] && driveUpResp[driveIdx].getResponseCode() < 400;
+    driveIdx++;
+    docs.push({ nombre_archivo: meta.nombre_archivo, tipo_mime: meta.tipo_mime, tamano_bytes: meta.tamano_bytes, storage_path: ok ? meta.path : null });
+  });
+
+  // Reinsertar solicitud
+  var fromRaw  = msg.getFrom();
+  var emailRe  = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/;
+  var emMatch  = emailRe.exec(fromRaw);
+  var emailRemit = emMatch ? emMatch[0].toLowerCase() : fromRaw;
+  var tipoRemitente = 'externo';
+  var colRes = sbGet(_url, _key, 'bib_colaboradores?correo=eq.' + encodeURIComponent(emailRemit) + '&select=tipo');
+  if (Array.isArray(colRes) && colRes[0]) tipoRemitente = colRes[0].tipo || 'colaborador';
+
+  var solRow = {
+    gmail_message_id: gmailMsgId,
+    fecha_recepcion:  msg.getDate().toISOString(),
+    remitente_nombre: fromRaw,
+    remitente_email:  emailRemit,
+    email_destino:    Session.getEffectiveUser().getEmail().toLowerCase(),
+    tipo_remitente:   tipoRemitente,
+    asunto:           msg.getSubject() || '(sin asunto)',
+    cuerpo:           msg.getPlainBody().substring(0, 1000),
+    estado:           'pendiente'
+  };
+  var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [solRow]);
+  if (!Array.isArray(insertRes) || !insertRes[0]) throw new Error('Error insertando solicitud: ' + JSON.stringify(insertRes));
+  var newSolId = insertRes[0].id;
+  Logger.log('Solicitud reinsertada con id=' + newSolId);
+
+  // Insertar documentos
+  if (docs.length) {
+    var docRows = docs.map(function(d) {
+      return Object.assign({ solicitud_id: newSolId }, d);
+    });
+    sbPostBatch(_url, _key, 'bib_documentos', docRows);
+    Logger.log('Documentos insertados: ' + docs.length + ' (' + driveLinks.length + ' de Drive)');
+  }
+  Logger.log('LISTO: ' + docs.length + ' archivos totales (' + adjuntos.length + ' MIME + ' + driveLinks.length + ' Drive)');
+  return { ok: true, solId: newSolId, docs: docs.length, drive: driveLinks.length };
+}
+
 // ── Extrae links de Drive del cuerpo HTML de un email ────────
 // Retorna array de { id, url, nombre } sin duplicados
 function _extraerLinksDrive(htmlBody) {
