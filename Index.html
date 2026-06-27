@@ -238,8 +238,20 @@
         <div id="caja-content"><div class="loader-wrap"><div class="loader"></div></div></div>
       </div>
 
-      <!-- NOTIFICACIONES -->
+      <!-- NOTIFICACIONES / CONFIGURACIÓN -->
       <div class="page" id="page-notificaciones">
+        <!-- Tipos de solicitud -->
+        <div style="margin-bottom:28px">
+          <div class="sec-hdr"><div class="sec-title">Tipos de solicitud</div><div class="sec-hdr-line"></div></div>
+          <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Define las categorías para clasificar las copias al recibirlas.</p>
+          <div id="tipos-copia-list" style="margin-bottom:12px"><div class="loader-wrap"><div class="loader"></div></div></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="nuevo-tipo-inp" class="fc" placeholder="Nuevo tipo..." style="max-width:220px;margin:0"
+              onkeydown="if(event.key==='Enter')agregarTipoCopia()">
+            <button class="btn btn-primary" onclick="agregarTipoCopia()"><i class="fa fa-plus fa-sm"></i> Agregar</button>
+          </div>
+        </div>
+        <!-- Notificaciones por correo -->
         <div id="notif-content"><div class="loader-wrap"><div class="loader"></div></div></div>
       </div>
 
@@ -611,6 +623,12 @@
     </div>
     <!-- Colaboradores ya seleccionados (visible siempre) -->
     <div id="picker-sel-section" style="padding:14px 20px 4px"></div>
+    <!-- Selector de tipo de solicitud (solo visible en "Recibir" y con ≥1 colaborador) -->
+    <div id="picker-tipo-wrap" style="padding:4px 20px 12px;display:none">
+      <hr style="margin:0 0 12px;border:none;border-top:1px solid var(--border2)">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:600;letter-spacing:.04em">TIPO DE SOLICITUD</div>
+      <select id="picker-tipo-select" class="fc" style="margin:0;width:100%" onchange="_pickerTipoCopia=this.value"></select>
+    </div>
     <!-- Agregar otro (colapsable) -->
     <div style="padding:0 20px 14px">
       <button id="picker-agregar-btn" class="picker-agregar-btn" onclick="togglePickerExtra()">

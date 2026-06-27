@@ -114,7 +114,7 @@ function toggleTema() {
   localStorage.setItem('bib_tema', nuevo);
 }
 // Aplicar tema guardado al cargar
-_aplicarTema(localStorage.getItem('bib_tema') || 'dark');
+_aplicarTema(localStorage.getItem('bib_tema') || 'light');
 
 // ── LIMPIEZA AUTOMÁTICA DE ARCHIVOS ──────────────────────────
 // Corre una vez por mes al iniciar sesión.

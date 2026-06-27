@@ -21,6 +21,10 @@ function _cfg(key) {
 // ENTRY POINT
 // ============================================================
 function doGet(e) {
+  if (e && e.parameter && e.parameter.accion === 'confirmarRecepcion' && e.parameter.sid) {
+    return _paginaConfirmacion(e.parameter.sid);
+  }
+
   if (e && e.parameter && e.parameter.payload) {
     var resultado;
     try {
@@ -50,6 +54,50 @@ function despachar(p) {
     case "enviarCorreo":       return enviarCorreo(p);
     default: return { error: "Acción no reconocida: " + p.accion };
   }
+}
+
+function _paginaConfirmacion(sid) {
+  var url = _cfg("SUPABASE_URL");
+  var key = _cfg("SUPABASE_KEY");
+  var contenido = '';
+
+  if (!url || !key || !sid) {
+    contenido = '<h2 style="color:#dc3545;margin-bottom:12px">⚠ Enlace inválido</h2>' +
+      '<p style="color:#555;font-size:15px">Este enlace no es válido.<br>Comunícate con la biblioteca si tienes dudas.</p>';
+  } else {
+    try {
+      // Verificar si ya fue confirmado antes de actualizar
+      var actual = sbGet(url, key, "bib_solicitudes?id=eq." + encodeURIComponent(sid) + "&select=recepcion_confirmada,recepcion_confirmada_en");
+      if (Array.isArray(actual) && actual.length > 0 && actual[0].recepcion_confirmada === true) {
+        var fechaConf = actual[0].recepcion_confirmada_en
+          ? new Date(actual[0].recepcion_confirmada_en).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
+          : '';
+        contenido = '<h2 style="color:#6f42c1;margin-bottom:12px">✓ Ya habías confirmado</h2>' +
+          '<p style="color:#555;font-size:15px">Esta recepción ya fue confirmada' + (fechaConf ? ' el <strong>' + fechaConf + '</strong>' : '') + '.<br>No es necesario hacer nada más.</p>';
+      } else {
+        sbPatch(url, key,
+          "bib_solicitudes?id=eq." + encodeURIComponent(sid),
+          { recepcion_confirmada: true, recepcion_confirmada_en: new Date().toISOString() }
+        );
+        contenido = '<h2 style="color:#6f42c1;margin-bottom:12px">✓ ¡Recepción confirmada!</h2>' +
+          '<p style="color:#555;font-size:15px">Gracias por confirmar.<br>La biblioteca ha registrado que recibiste las copias.</p>';
+      }
+    } catch(ex) {
+      Logger.log("_paginaConfirmacion error: " + ex.toString());
+      contenido = '<h2 style="color:#dc3545;margin-bottom:12px">⚠ No se pudo confirmar</h2>' +
+        '<p style="color:#555;font-size:15px">Hubo un error al procesar tu confirmación.<br>Comunícate con la biblioteca si tienes dudas.</p>';
+    }
+  }
+
+  return HtmlService.createHtmlOutput(
+    '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Biblioteca Goyavier</title></head>' +
+    '<body style="font-family:Arial,sans-serif;max-width:480px;margin:60px auto;text-align:center;padding:20px">' +
+    '<p style="color:#888;font-size:13px;margin-bottom:24px">Biblioteca — Colegio Goyavier</p>' +
+    contenido +
+    '</body></html>'
+  );
 }
 
 // ============================================================
@@ -433,6 +481,13 @@ function enviarCorreo(params) {
 
       case "entregado":
         asunto = "Impresion entregada con exito! :) - " + ref;
+        var _gasUrl      = ScriptApp.getService().getUrl();
+        var _confirmUrl  = _gasUrl + '?accion=confirmarRecepcion&sid=' + encodeURIComponent(params.solicitudUuid || '');
+        var _botonConfirm = params.solicitudUuid
+          ? '<div style="text-align:center;margin:24px 0">' +
+            '<a href="' + _confirmUrl + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí las copias</a>' +
+            '</div>'
+          : '';
         html = wrap("#6f42c1", "Todo listo! :D",
           '<p>Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!</p>' +
           '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
@@ -444,12 +499,14 @@ function enviarCorreo(params) {
           (params.tipoImpresion ? fila("Tipo:", params.tipoImpresion + (params.forma ? " / " + params.forma : "")) : "") +
           (params.numHojas      ? fila("Hojas:", params.numHojas + " hojas") : "") +
           '</table>' +
+          _botonConfirm +
           '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0">' +
           'Gracias por usar el servicio de la Biblioteca Goyavier, fue un gusto ayudarte.</p>');
         plain =
           "Todo listo! :D\n\n" +
           "Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!\n\n" +
           ">> Asunto:\n" + (params.asunto || ref) + "\n\n" +
+          (params.solicitudUuid ? "Confirma que recibiste las copias en este enlace:\n" + _confirmUrl + "\n\n" : "") +
           "Gracias por usar el servicio de la biblioteca, fue un gusto ayudarte.\n\n" +
           "[BIBLIOTECA]\nColegio Goyavier\n\n" +
           "Tienes alguna pregunta? Responde a este correo.";

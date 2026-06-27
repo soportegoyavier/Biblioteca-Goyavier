@@ -27,7 +27,7 @@ function navTo(page, el, mobId) {
   if (page === 'reportes')       cargarReportes();
   if (page === 'ventas')         cargarVentas();
   if (page === 'caja')           { _initCajaFecha(); cargarCaja(); }
-  if (page === 'notificaciones') cargarNotificaciones();
+  if (page === 'notificaciones') { cargarNotificaciones(); cargarTiposCopia(); }
   if (page === 'colaboradores')  cargarColaboradores();
 }
 
@@ -37,7 +37,7 @@ function refreshPage() {
   else if (_pagina === 'reportes')       cargarReportes();
   else if (_pagina === 'ventas')         cargarVentas();
   else if (_pagina === 'caja')           cargarCaja();
-  else if (_pagina === 'notificaciones') cargarNotificaciones();
+  else if (_pagina === 'notificaciones') { cargarNotificaciones(); cargarTiposCopia(); }
   else if (_pagina === 'colaboradores')  cargarColaboradores();
 }
 

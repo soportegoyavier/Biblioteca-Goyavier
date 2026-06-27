@@ -3,11 +3,14 @@
 // ── ESTADO LOCAL ─────────────────────────────────────────────
 let _colabs         = [];
 let _editColabId    = null;
-let _pickerColabs   = [];        // caché para el picker
-let _pickerSel      = new Set(); // emails seleccionados
-let _pickerConfirm  = null;      // callback onConfirm(destinatarios[])
-let _pickerCancel   = null;      // callback onCancel()
-let _pickerExtraOpen = false;    // sección "agregar otro" expandida
+let _pickerColabs    = [];        // caché para el picker
+let _pickerSel       = new Set(); // emails seleccionados
+let _pickerConfirm   = null;      // callback onConfirm(destinatarios[], tipoCopia)
+let _pickerCancel    = null;      // callback onCancel()
+let _pickerExtraOpen = false;     // sección "agregar otro" expandida
+let _pickerTipoCopia = 'General'; // tipo seleccionado en el picker
+let _pickerTiposList = [];        // tipos cargados de bib_tipos_copia
+let _pickerShowTipo  = false;     // si mostrar selector de tipo
 
 // ── ADMIN: CARGAR Y RENDERIZAR ────────────────────────────────
 async function cargarColaboradores() {
@@ -175,14 +178,29 @@ async function guardarColaborador() {
 //   onConfirm(destinatarios) → array de {nombre, email}
 //   onCancel()               → usuario cerró sin confirmar
 //   preSelected              → array de {email} ya marcados (pre-selección automática)
-async function abrirPickerDestinatarios(onConfirm, onCancel, preSelected = []) {
-  _pickerConfirm  = onConfirm;
-  _pickerCancel   = onCancel;
+async function abrirPickerDestinatarios(onConfirm, onCancel, preSelected = [], showTipoPicker = false) {
+  _pickerConfirm   = onConfirm;
+  _pickerCancel    = onCancel;
   _pickerExtraOpen = false;
+  _pickerShowTipo  = showTipoPicker;
+  _pickerTipoCopia = 'General';
 
   document.getElementById('picker-list').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   document.getElementById('modal-destinatarios').classList.add('open');
   document.getElementById('picker-sel-section').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
+
+  // Ocultar sección de tipo hasta que se seleccione al menos un colaborador
+  const tipoWrap = document.getElementById('picker-tipo-wrap');
+  if (tipoWrap) tipoWrap.style.display = 'none';
+
+  if (showTipoPicker) {
+    if (!_pickerTiposList.length) {
+      const { data } = await _sb.from('bib_tipos_copia').select('nombre').eq('activo', true).order('orden');
+      _pickerTiposList = (data || []).map(t => t.nombre);
+      if (!_pickerTiposList.length) _pickerTiposList = ['General', 'Institucional', 'Curso de inglés'];
+    }
+    _renderTipoSelect();
+  }
 
   if (!_pickerColabs.length) {
     const { data, error } = await _sb
@@ -233,6 +251,8 @@ function _renderPickerSelSection() {
 
   if (_pickerSel.size === 0) {
     sec.innerHTML = '<div class="picker-empty-msg" style="margin-bottom:8px">Sin destinatarios — el correo no se enviará</div>';
+    const wrap = document.getElementById('picker-tipo-wrap');
+    if (wrap) wrap.style.display = 'none';
     return;
   }
 
@@ -252,6 +272,7 @@ function _renderPickerSelSection() {
     </div>`);
   });
   sec.innerHTML = cards.length ? cards.join('') : '<div class="picker-empty-msg" style="margin-bottom:8px">Sin destinatarios seleccionados</div>';
+  _renderTipoSelect();
 }
 
 // ── TOGGLE SECCIÓN EXTRA ───────────────────────────────────────
@@ -334,6 +355,17 @@ function pickerSearchDebounce() {
   window._pickerTimer = setTimeout(() => _renderPickerList(document.getElementById('picker-search')?.value || ''), 250);
 }
 
+function _renderTipoSelect() {
+  const sel  = document.getElementById('picker-tipo-select');
+  const wrap = document.getElementById('picker-tipo-wrap');
+  if (!sel || !wrap) return;
+  sel.innerHTML = _pickerTiposList.map(t =>
+    `<option value="${escHtml(t)}"${t === _pickerTipoCopia ? ' selected' : ''}>${escHtml(t)}</option>`
+  ).join('');
+  // Mostrar solo si hay tipo picker activo y al menos un colaborador seleccionado
+  wrap.style.display = (_pickerShowTipo && _pickerSel.size > 0) ? '' : 'none';
+}
+
 function confirmarPicker() {
   const destinatarios = [];
   _pickerColabs.forEach(c => {
@@ -341,7 +373,8 @@ function confirmarPicker() {
       if (_pickerSel.has(ce.email)) destinatarios.push({ nombre: c.nombre, email: ce.email });
     });
   });
+  const tipo = _pickerShowTipo ? _pickerTipoCopia : null;
   cerrarModal('modal-destinatarios');
   _pickerCancel = null;
-  if (_pickerConfirm) { _pickerConfirm(destinatarios); _pickerConfirm = null; }
+  if (_pickerConfirm) { _pickerConfirm(destinatarios, tipo); _pickerConfirm = null; }
 }

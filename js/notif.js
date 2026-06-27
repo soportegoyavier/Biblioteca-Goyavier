@@ -1,3 +1,44 @@
+// ── TIPOS DE COPIA ────────────────────────────────────────────
+async function cargarTiposCopia() {
+  const el = document.getElementById('tipos-copia-list');
+  if (!el) return;
+  const { data, error } = await _sb.from('bib_tipos_copia').select('*').order('orden');
+  if (error) { el.innerHTML = `<p style="color:var(--red);font-size:13px">${error.message}</p>`; return; }
+  const tipos = data || [];
+  el.innerHTML = tipos.map(t => `
+    <div class="notif-row" style="gap:10px">
+      <div class="notif-info">
+        <div class="notif-email">${escHtml(t.nombre)}</div>
+      </div>
+      <label class="toggle" title="${t.activo?'Desactivar':'Activar'}">
+        <input type="checkbox" ${t.activo?'checked':''} onchange="toggleTipoCopia(${t.id},this.checked)">
+        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+      </label>
+    </div>`).join('') || '<p style="font-size:13px;color:var(--muted)">Sin tipos registrados</p>';
+}
+
+async function toggleTipoCopia(id, activo) {
+  const { error } = await _sb.from('bib_tipos_copia').update({ activo }).eq('id', id);
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  _pickerTiposList = []; // invalidar caché del picker
+  await cargarTiposCopia();
+  toast(activo ? 'Tipo activado' : 'Tipo desactivado', 'success');
+}
+
+async function agregarTipoCopia() {
+  const inp = document.getElementById('nuevo-tipo-inp');
+  const nombre = inp?.value?.trim();
+  if (!nombre) { toast('Ingresa un nombre', 'error'); inp?.focus(); return; }
+  const { data: maxOrden } = await _sb.from('bib_tipos_copia').select('orden').order('orden', { ascending: false }).limit(1).single();
+  const orden = (maxOrden?.orden ?? -1) + 1;
+  const { error } = await _sb.from('bib_tipos_copia').insert({ nombre, orden });
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  _pickerTiposList = []; // invalidar caché del picker
+  inp.value = '';
+  await cargarTiposCopia();
+  toast('Tipo agregado', 'success');
+}
+
 // ── NOTIFICACIONES ────────────────────────────────────────────
 async function cargarNotificaciones() {
   const el = document.getElementById('notif-content');

@@ -7,13 +7,17 @@ async function cargarReportes() {
     const ini  = new Date(ano, mes, 1).toISOString();
     const fin  = new Date(ano, mes + 1, 1).toISOString();
     const inia = new Date(ano, 0, 1).toISOString();
-    const [{ data: mesD }, { data: anoD }, { data: topD }] = await Promise.all([
+    const [{ data: mesD }, { data: anoD }, { data: topD }, { data: tipoMesD }, { data: tipoAnoD }] = await Promise.all([
       _sb.from('bib_documentos').select('num_hojas,tipo_impresion,forma_impresion,bib_solicitudes!inner(fecha_recepcion)')
         .gte('bib_solicitudes.fecha_recepcion', ini).lt('bib_solicitudes.fecha_recepcion', fin),
       _sb.from('bib_documentos').select('num_hojas,tipo_impresion,forma_impresion,bib_solicitudes!inner(fecha_recepcion)')
         .gte('bib_solicitudes.fecha_recepcion', inia),
       _sb.from('bib_solicitudes').select('profesor,remitente_email,bib_documentos(num_hojas)')
-        .gte('fecha_recepcion', inia).eq('estado', 'entregado')
+        .gte('fecha_recepcion', inia).eq('estado', 'entregado'),
+      _sb.from('bib_solicitudes').select('tipo_copia,bib_documentos(num_hojas)')
+        .gte('fecha_recepcion', ini).lt('fecha_recepcion', fin).neq('estado', 'cancelado'),
+      _sb.from('bib_solicitudes').select('tipo_copia,bib_documentos(num_hojas)')
+        .gte('fecha_recepcion', inia).neq('estado', 'cancelado')
     ]);
     const { data: destD } = await _sb.from('bib_solicitudes').select('email_destino').gte('fecha_recepcion', inia);
     function agg(rows) {
@@ -28,6 +32,21 @@ async function cargarReportes() {
       return {total,bn,color,una,doble};
     }
     const mes2=agg(mesD), ano2=agg(anoD);
+
+    // Desglose por tipo_copia
+    function aggPorTipo(rows) {
+      const m = {};
+      (rows||[]).forEach(s => {
+        const t = s.tipo_copia || 'General';
+        const h = (s.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
+        m[t] = (m[t]||0) + h;
+      });
+      return m;
+    }
+    const tiposMes = aggPorTipo(tipoMesD);
+    const tiposAno = aggPorTipo(tipoAnoD);
+    const tiposUnion = [...new Set([...Object.keys(tiposMes), ...Object.keys(tiposAno)])].sort();
+
     const tops={};
     (topD||[]).forEach(s => {
       const k=s.profesor||s.remitente_email||'Desconocido';
@@ -59,6 +78,22 @@ async function cargarReportes() {
           <div class="rep-stat"><span>Una cara</span><span class="rep-stat-val">${ano2.una}</span></div>
           <div class="rep-stat"><span>Doble cara</span><span class="rep-stat-val">${ano2.doble}</span></div>
         </div>
+        ${tiposUnion.length >= 1 ? `
+        <div class="rep-card" style="grid-column:span 2">
+          <div class="rep-card-title">Hojas por tipo de solicitud</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead><tr>
+              <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border2)">Tipo</th>
+              <th style="text-align:right;padding:5px 8px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border2)">Este mes</th>
+              <th style="text-align:right;padding:5px 8px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border2)">Acum. ${ano}</th>
+            </tr></thead>
+            <tbody>${tiposUnion.map(t => `<tr>
+              <td style="padding:5px 8px">${escHtml(t)}</td>
+              <td style="padding:5px 8px;text-align:right;font-weight:600">${tiposMes[t]||0}</td>
+              <td style="padding:5px 8px;text-align:right;font-weight:600;color:var(--accent)">${tiposAno[t]||0}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+        </div>` : ''}
         <div class="rep-card" style="grid-column:span 2">
           <div class="rep-card-title">Top solicitantes · ${ano} (hojas entregadas)</div>
           ${topArr.length ? topArr.map(([n,h]) => `
@@ -115,11 +150,11 @@ function _xC(val, t, sid) {
   return `<Cell${s}><Data ss:Type="${tipo}">${v}</Data></Cell>`;
 }
 
-// Fila de encabezado que llena N columnas con el texto en la primera
+// Fila de encabezado con celda combinada real (MergeAcross)
 function _xHdr(text, sid, n) {
-  let r = _xC(text, 'String', sid);
-  for (let i = 1; i < n; i++) r += _xC('', 'String', sid);
-  return `<Row ss:AutoFitHeight="0" ss:Height="24">${r}</Row>`;
+  const s     = sid ? ` ss:StyleID="${sid}"` : '';
+  const merge = n > 1 ? ` ss:MergeAcross="${n - 1}"` : '';
+  return `<Row ss:AutoFitHeight="0" ss:Height="24"><Cell${s}${merge}><Data ss:Type="String">${_xEsc(text)}</Data></Cell></Row>`;
 }
 
 function _xRow(cells, h) {
@@ -215,7 +250,7 @@ async function exportarExcelGeneral() {
   try {
     const [{ data: sols, error: e1 }, { data: trabs }] = await Promise.all([
       _sb.from('bib_solicitudes')
-        .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,destinatarios,profesor,nombre_recibe,notif_impreso_en,notif_entregado_en,fecha_entrega,bib_documentos(num_hojas,tipo_impresion,forma_impresion,nombre_archivo)')
+        .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,tipo_copia,destinatarios,profesor,nombre_recibe,notif_impreso_en,notif_entregado_en,fecha_entrega,bib_documentos(num_hojas,tipo_impresion,forma_impresion,nombre_archivo)')
         .gte('fecha_recepcion', ini).lt('fecha_recepcion', fin)
         .order('fecha_recepcion', { ascending: true }),
       _sb.from('bib_trabajos_impresion')
@@ -274,8 +309,8 @@ async function exportarExcelGeneral() {
     }
     const s1 = _xSheet(`${nom} ${ano} - Resumen`, [220,100,100,100,100], r1);
 
-    // ── HOJA 2: SOLICITUDES (15 columnas) ────────────────────
-    const H2 = ['N','ID Sistema','Fecha Recepcion','Remitente','Asunto','Estado','Notificar a','Total Hojas','B y N','Color','Una cara','Doble cara','Fecha Impresion','Fecha Entrega','Entregado a'];
+    // ── HOJA 2: SOLICITUDES (16 columnas) ────────────────────
+    const H2 = ['N','ID Sistema','Fecha Recepcion','Remitente','Asunto','Tipo','Estado','Notificar a','Total Hojas','B y N','Color','Una cara','Doble cara','Fecha Impresion','Fecha Entrega','Entregado a'];
     const N2 = H2.length;
     const r2 = [];
     r2.push(_xHdr(`SOLICITUDES — ${nom} ${ano}`, 'tit', N2));
@@ -292,6 +327,7 @@ async function exportarExcelGeneral() {
       r2.push(_xRow([
         _xC(i+1,'Number',sid), _xC(s.id_solicitud||'','String',sid), _xC(_xFecha(s.fecha_recepcion),'String',sid),
         _xC(s.remitente_email||'','String',sid), _xC(s.asunto||'','String',sid),
+        _xC(s.tipo_copia||'General','String',sid),
         _xC((s.estado||'')[0].toUpperCase()+(s.estado||'').slice(1),'String',sid),
         _xC(dest,'String',sid),
         _xC(hT,'Number',sid),_xC(hB,'Number',sid),_xC(hC,'Number',sid),_xC(hU,'Number',sid),_xC(hD,'Number',sid),
@@ -302,12 +338,12 @@ async function exportarExcelGeneral() {
     });
     r2.push(_xRow([
       _xC('TOTAL','String','tot'),_xC('','String','tot'),_xC('','String','tot'),
-      _xC('','String','tot'),_xC('','String','tot'),_xC(SS.length,'Number','tot'),
+      _xC('','String','tot'),_xC('','String','tot'),_xC('','String','tot'),_xC(SS.length,'Number','tot'),
       _xC('','String','tot'),_xC(hTot,'Number','tot'),
       _xC(hBN,'Number','tot'),_xC(hCo,'Number','tot'),_xC(hUn,'Number','tot'),_xC(hDo,'Number','tot'),
       _xC('','String','tot'),_xC('','String','tot'),_xC('','String','tot'),
     ], 22));
-    const s2 = _xSheet('Solicitudes', [30,110,120,200,220,90,240,80,70,70,80,85,115,115,180], r2);
+    const s2 = _xSheet('Solicitudes', [30,110,120,200,220,100,90,240,80,70,70,80,85,115,115,180], r2);
 
     // ── HOJA 3: TRABAJOS DE IMPRESION (7 columnas) ────────────
     const H3 = ['N','ID Solicitud','Nombre del Trabajo','Colaborador','Total Hojas','N Archivos','Archivos (detalle)'];

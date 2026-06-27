@@ -7,7 +7,7 @@ async function cargarSolicitudes() {
     const p2 = new Date(_ano, _mes + 1, 1).toISOString();
     const buscar = document.getElementById('inp-buscar')?.value?.trim() || '';
     let q = _sb.from('bib_solicitudes')
-      .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,profesor,materia,bib_documentos(id,nombre_archivo,num_hojas,tipo_impresion,forma_impresion)')
+      .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,profesor,materia,tipo_copia,recepcion_confirmada,recepcion_confirmada_en,bib_documentos(id,nombre_archivo,num_hojas,tipo_impresion,forma_impresion)')
       .in('tipo_remitente', ['institucional', 'general'])
       .gte('fecha_recepcion', p1).lt('fecha_recepcion', p2)
       .order('fecha_recepcion', { ascending: false });
@@ -45,9 +45,13 @@ function filaHTML(r) {
     <td class="td-m">${fmtFecha(r.fecha_recepcion)}</td>
     <td>
       <div style="font-size:13px;font-weight:500;max-width:220px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35">${r.asunto||'—'}</div>
-      <div class="td-m">${r.profesor || r.remitente_email || ''}</div>
+      <div class="td-m">${r.profesor || r.remitente_email || ''}${r.tipo_copia && r.tipo_copia!=='General'?` <span style="font-size:10px;background:var(--s2);border:1px solid var(--border2);border-radius:4px;padding:1px 5px;color:var(--muted)">${escHtml(r.tipo_copia)}</span>`:''}</div>
     </td>
-    <td>${badge(r.estado)}</td>
+    <td>
+      ${badge(r.estado)}
+      ${r.estado==='entregado'?`<div style="margin-top:4px;font-size:11px;font-weight:600;${r.recepcion_confirmada?'color:var(--green)':'color:var(--muted)'}">
+        ${r.recepcion_confirmada?'✓ Confirmado':'⏳ Sin confirmar'}</div>`:''}
+    </td>
     <td class="td-m">${hojas > 0 ? hojas : '—'}</td>
     <td>${accionHTML(r)}</td>
     <td style="display:flex;gap:4px;align-items:center">
@@ -78,10 +82,13 @@ function renderCards(rows) {
           <div class="sol-card-id" onclick="verDetalle(${r.id})" style="cursor:pointer">${r.id_solicitud||'Sin ID'}</div>
           <div class="sol-card-fecha">${fmtFecha(r.fecha_recepcion)}</div>
         </div>
-        ${badge(r.estado)}
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          ${badge(r.estado)}
+          ${r.estado==='entregado'?`<span style="font-size:11px;font-weight:600;${r.recepcion_confirmada?'color:var(--green)':'color:var(--muted)'}">${r.recepcion_confirmada?'✓ Confirmado':'⏳ Sin confirmar'}</span>`:''}
+        </div>
       </div>
       <div class="sol-card-asunto">${r.asunto||'—'}</div>
-      <div class="sol-card-de">${r.profesor||r.remitente_email||'—'}</div>
+      <div class="sol-card-de">${r.profesor||r.remitente_email||'—'}${r.tipo_copia && r.tipo_copia!=='General'?` <span style="font-size:10px;background:var(--s2);border:1px solid var(--border2);border-radius:4px;padding:1px 5px;color:var(--muted)">${escHtml(r.tipo_copia)}</span>`:''}</div>
       <div class="sol-card-footer">
         ${r.estado==='pendiente'?`<button class="btn btn-na" onclick="marcarRecibido(${r.id},this)"><i class="fa fa-check fa-sm"></i> Recibir</button>`:''}
         ${r.estado==='recibido' ?`<button class="btn btn-nb" onclick="abrirModalImpreso(${r.id})"><i class="fa fa-print fa-sm"></i> Imprimir</button>`:''}
@@ -97,11 +104,11 @@ function renderCards(rows) {
 async function marcarRecibido(id, btn) {
   btn.classList.add('loading'); btn.disabled = true;
   await abrirPickerDestinatarios(
-    async (destinatarios) => {
+    async (destinatarios, tipoCopia) => {
       try {
         const { data: idRes } = await _sb.rpc('generar_id_solicitud');
         const { data: sol, error } = await _sb.from('bib_solicitudes')
-          .update({ estado:'recibido', id_solicitud: idRes, notif_recibido_en: new Date().toISOString(), destinatarios })
+          .update({ estado:'recibido', id_solicitud: idRes, notif_recibido_en: new Date().toISOString(), destinatarios, tipo_copia: tipoCopia || 'General' })
           .eq('id', id).select('id_solicitud,asunto,profesor').single();
         if (error) throw error;
         await _sb.from('bib_historial_estados').insert({ solicitud_id:id, estado_anterior:'pendiente', estado_nuevo:'recibido' });
@@ -122,7 +129,8 @@ async function marcarRecibido(id, btn) {
         btn.classList.remove('loading'); btn.disabled = false;
       }
     },
-    () => { btn.classList.remove('loading'); btn.disabled = false; }
+    () => { btn.classList.remove('loading'); btn.disabled = false; },
+    [], true
   );
 }
 
@@ -142,7 +150,7 @@ async function abrirModalImpreso(id) {
   renderImpresoDestinatarios();
   try {
     const { data, error } = await _sb.from('bib_solicitudes')
-      .select('id_solicitud,asunto,destinatarios,bib_documentos(id,nombre_archivo)')
+      .select('id_solicitud,asunto,destinatarios,bib_documentos(id,nombre_archivo,storage_path)')
       .eq('id', id).single();
     if (error) throw error;
     _asuntoSolicitud = data.asunto || '';
@@ -152,6 +160,13 @@ async function abrirModalImpreso(id) {
       archivos: []
     }));
     _archivosDisponibles = data.bib_documentos || [];
+    _archivoUrlsMap = new Map();
+    await Promise.all(_archivosDisponibles.map(async f => {
+      if (!f.storage_path) return;
+      const { data: sd } = await _sb.storage.from('biblioteca-adjuntos')
+        .createSignedUrl(f.storage_path, 3600, { download: false });
+      if (sd?.signedUrl) _archivoUrlsMap.set(f.id, { url: sd.signedUrl, nombre: f.nombre_archivo });
+    }));
     document.getElementById('mi-id').textContent     = data.id_solicitud || 'Sin ID';
     document.getElementById('mi-asunto').textContent = _asuntoSolicitud;
     document.getElementById('mi-nombre').value       = _asuntoSolicitud;
@@ -214,12 +229,17 @@ function _renderArchivoRow(colabIdx, f, archivosAsig) {
   const ok   = !!asig;
   const cfg  = asig || { copias:1, paginas:1, tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta' };
   const sel  = (name, val, opt) => opt.map(o => `<option${cfg[name]===o?' selected':''}>${o}</option>`).join('');
+  const _dlInfo = _archivoUrlsMap.get(f.id);
+  const _dlBtn  = _dlInfo
+    ? `<a class="adj-btn dl" href="${escHtml(_dlInfo.url)}&download=${encodeURIComponent(_dlInfo.nombre)}" target="_blank" title="Descargar" style="flex-shrink:0;margin-left:4px"><i class="fa fa-download fa-xs"></i></a>`
+    : '';
   return `<div class="arch-row${ok?' arch-row-on':''}">
     <label class="arch-check-lbl" onclick="event.stopPropagation()">
       <input type="checkbox" ${ok?'checked':''}
         onchange="toggleArchivoColab(${colabIdx},${f.id},'${f.nombre_archivo.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}',this.checked)">
       <i class="fa fa-file-lines fa-sm" style="color:var(--muted);flex-shrink:0"></i>
       <span style="flex:1;font-size:13px;word-break:break-all">${escHtml(f.nombre_archivo)}</span>
+      ${_dlBtn}
     </label>
     ${ok ? `<div class="arch-cfg">
       <div class="fc-grid" style="margin-bottom:8px">
@@ -523,6 +543,7 @@ async function confirmarEntrega() {
         gasCall('enviarCorreo', {
           tipo:'entregado', destinatario: email,
           numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
+          solicitudUuid: _idEntrega,
           asunto: sol.asunto, profesor: nombre,
           materia: sol.materia, numHojas: hojasDest,
           tipoImpresion: primerArch?.tipo_impresion,
@@ -629,13 +650,24 @@ async function verDetalle(id) {
       <div class="dr"><span class="dlbl">Notificar a</span><span class="dval">${dests}</span></div>
       <div class="dr"><span class="dlbl">Estado</span><span class="dval">${badge(data.estado)}</span></div>
       <div class="dr"><span class="dlbl">Fecha recepción</span><span class="dval">${fmtFecha(data.fecha_recepcion)}</span></div>
+      ${data.cuerpo?`
       <hr class="msep">
+      <div class="msec-hdr" style="margin-bottom:6px">Mensaje original</div>
+      <div style="background:var(--s2);border:1px solid var(--border2);border-radius:7px;padding:12px 14px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:var(--text)">${escHtml(data.cuerpo)}</div>`:''}
+      <hr class="msep">
+      <div class="dr"><span class="dlbl">Tipo</span><span class="dval">${escHtml(data.tipo_copia||'General')}</span></div>
       <div class="dr"><span class="dlbl">Área</span><span class="dval">${data.area||'—'}</span></div>
       ${data.observaciones?`<div class="dr"><span class="dlbl">Observaciones</span><span class="dval">${data.observaciones}</span></div>`:''}
       ${data.estado==='entregado'?`
       <hr class="msep">
       <div class="dr"><span class="dlbl">Entregado a</span><span class="dval">${data.nombre_recibe||'—'}</span></div>
-      <div class="dr"><span class="dlbl">Fecha entrega</span><span class="dval">${fmtFecha(data.fecha_entrega)}</span></div>`:''}
+      <div class="dr"><span class="dlbl">Fecha entrega</span><span class="dval">${fmtFecha(data.fecha_entrega)}</span></div>
+      <div class="dr"><span class="dlbl">Confirmación</span><span class="dval">${data.recepcion_confirmada
+        ? `<span style="color:var(--green);font-weight:600">✓ Confirmado${data.recepcion_confirmada_en ? ' · ' + fmtFecha(data.recepcion_confirmada_en) : ''}</span>`
+        : `<span style="font-size:12px;color:var(--muted)">Pendiente</span>
+           <button style="margin-left:10px;padding:4px 12px;font-size:12px;border-radius:5px;border:1px solid var(--green);color:var(--green);background:transparent;cursor:pointer"
+             onclick="confirmarRecepcionManual('${data.id}')">✓ Marcar como confirmado</button>`
+      }</span></div>`:''}
       ${trabajosHTML}
       <hr class="msep">
       <div class="msec-hdr" style="margin-bottom:10px">Documentos adjuntos</div>
@@ -659,6 +691,17 @@ function descargarTodos(archivos) {
     }, i * 800); // 800ms entre cada descarga para que el browser no las bloquee
   });
   toast(`Descargando ${archivos.length} archivos…`, 'info');
+}
+
+// ── CONFIRMAR RECEPCIÓN MANUAL ────────────────────────────────
+async function confirmarRecepcionManual(id) {
+  const { error } = await _sb.from('bib_solicitudes')
+    .update({ recepcion_confirmada: true, recepcion_confirmada_en: new Date().toISOString() })
+    .eq('id', id);
+  if (error) { toast('Error al confirmar: ' + error.message, 'error'); return; }
+  toast('Recepción confirmada', 'success');
+  await cargarSolicitudes();
+  verDetalle(id);
 }
 
 // ── FILTROS ───────────────────────────────────────────────────
