@@ -227,7 +227,7 @@ function _renderColabCard(d, idx, asignadosGlobal) {
 function _renderArchivoRow(colabIdx, f, archivosAsig) {
   const asig = archivosAsig.find(a => a.doc_id === f.id);
   const ok   = !!asig;
-  const cfg  = asig || { copias:1, paginas:1, tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta' };
+  const cfg  = asig || { copias:1, paginas:1, tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta', tipo_papel:'Bond' };
   const sel  = (name, val, opt) => opt.map(o => `<option${cfg[name]===o?' selected':''}>${o}</option>`).join('');
   const _dlInfo = _archivoUrlsMap.get(f.id);
   const _dlBtn  = _dlInfo
@@ -265,6 +265,12 @@ function _renderArchivoRow(colabIdx, f, archivosAsig) {
           <label class="fc-radio-lbl"><input type="radio" name="fhoja-${colabIdx}-${f.id}" value="Doble Carta" ${cfg.tamano_hoja==='Doble Carta'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tamano_hoja',this.value)"> Doble Carta</label>
           <label class="fc-radio-lbl"><input type="radio" name="fhoja-${colabIdx}-${f.id}" value="A4" ${cfg.tamano_hoja==='A4'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tamano_hoja',this.value)"> A4</label>
         </div>
+        <div class="fc-radio-group">
+          <label class="fc-radio-lbl"><input type="radio" name="fpapel-${colabIdx}-${f.id}" value="Bond" ${(cfg.tipo_papel||'Bond')==='Bond'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tipo_papel',this.value)"><i class="fa fa-file fa-sm" style="color:var(--muted)"></i> Bond</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fpapel-${colabIdx}-${f.id}" value="Opalina" ${cfg.tipo_papel==='Opalina'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tipo_papel',this.value)"> Opalina</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fpapel-${colabIdx}-${f.id}" value="Propalcote" ${cfg.tipo_papel==='Propalcote'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tipo_papel',this.value)"> Propalcote</label>
+          <label class="fc-radio-lbl"><input type="radio" name="fpapel-${colabIdx}-${f.id}" value="Adhesivo" ${cfg.tipo_papel==='Adhesivo'?'checked':''} onchange="updateArchivoConfig(${colabIdx},${f.id},'tipo_papel',this.value)"> Adhesivo</label>
+        </div>
       </div>
     </div>` : ''}
   </div>`;
@@ -281,7 +287,7 @@ function toggleArchivoColab(colabIdx, docId, nombre, checked) {
   if (checked) {
     if (!d.archivos.find(a => a.doc_id === docId))
       d.archivos.push({ doc_id: docId, nombre, copias:1, paginas:1,
-        tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta', total_hojas:1 });
+        tipo_impresion:'Blanco y negro', modo_impresion:'Una cara', tamano_hoja:'Carta', tipo_papel:'Bond', total_hojas:1 });
   } else {
     d.archivos = d.archivos.filter(a => a.doc_id !== docId);
   }
@@ -348,7 +354,7 @@ async function confirmarImpreso() {
       const archivos = d.archivos.map(a => ({
         doc_id: a.doc_id, nombre: a.nombre, copias: a.copias, paginas: a.paginas,
         tipo_impresion: a.tipo_impresion, modo_impresion: a.modo_impresion,
-        tamano_hoja: a.tamano_hoja, total_hojas: calcHojas(a)
+        tamano_hoja: a.tamano_hoja, tipo_papel: a.tipo_papel||'Bond', total_hojas: calcHojas(a)
       }));
       return { solicitud_id: _idImpreso, nombre, profesor: d.nombre,
         archivos, total_hojas: archivos.reduce((s, a) => s + a.total_hojas, 0), observaciones: null };
@@ -359,7 +365,7 @@ async function confirmarImpreso() {
 
     const docUpdates = colabsConArch.flatMap(d =>
       d.archivos.map(a => _sb.from('bib_documentos').update({
-        num_hojas: calcHojas(a), tipo_impresion: a.tipo_impresion, forma_impresion: a.modo_impresion
+        num_hojas: calcHojas(a), tipo_impresion: a.tipo_impresion, forma_impresion: a.modo_impresion, tipo_papel: a.tipo_papel||'Bond'
       }).eq('id', a.doc_id))
     );
     if (docUpdates.length) await Promise.all(docUpdates);
