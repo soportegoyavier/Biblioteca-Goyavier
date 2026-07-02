@@ -32,3 +32,11 @@ let _cancelarId       = null;
 let _cancelarTipo     = 'copias';
 let _eliminarId       = null;
 let _abonoEmailRemit  = null;
+// Feature 1 — solicitudes manuales
+let _esManualPersonal        = false;
+let _mnmEmailTimer           = null;
+// Feature 2 — confirmación de entrega en ventas
+let _confirmarEntregaVentasId = null;
+// Feature 3 — precio automático
+let _precioUnitarioCalculado  = 0;
+let _esCandidatoColab         = false;

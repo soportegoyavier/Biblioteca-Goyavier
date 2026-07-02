@@ -460,6 +460,10 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
 /* ── DANGER BUTTON VARIANTS ─────────────────────── */
 .btn-mover-inst{padding:4px 7px;background:rgba(56,139,253,.1);color:var(--accent,#388bfd);border:1px solid rgba(56,139,253,.25)}
 .btn-mover-inst:hover:not(:disabled){background:rgba(56,139,253,.2)}
+.btn-entregar-vt{font-size:11px;padding:3px 9px;border-radius:5px;border:1px solid var(--amber);color:var(--amber);background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.btn-entregar-vt:hover{background:rgba(210,153,34,.12)}
+.btn-entrega-conf{font-size:11px;padding:3px 9px;border-radius:5px;border:1px solid var(--green);color:var(--green);background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.btn-entrega-conf:hover{background:rgba(63,185,80,.12)}
 .btn-danger-sm{padding:4px 7px;background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)}
 .btn-danger-sm:hover:not(:disabled){background:rgba(248,81,73,.18)}
 .btn-danger{background:rgba(248,81,73,.18);color:var(--red);border:1px solid rgba(248,81,73,.35)}

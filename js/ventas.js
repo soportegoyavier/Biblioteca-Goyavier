@@ -7,7 +7,7 @@ async function cargarVentas() {
     const p2 = new Date(_ano, _mes + 1, 1).toISOString();
     const buscar = document.getElementById('inp-buscar-ventas')?.value?.trim() || '';
     let q = _sb.from('bib_solicitudes')
-      .select('id,fecha_recepcion,remitente_email,remitente_nombre,asunto,estado,bib_trabajos_personal(id,precio_total,valor_pagado)')
+      .select('id,fecha_recepcion,remitente_email,remitente_nombre,asunto,estado,es_manual,fecha_entrega,recepcion_confirmada,bib_trabajos_personal(id,precio_total,valor_pagado)')
       .eq('tipo_remitente', 'personal')
       .gte('fecha_recepcion', p1).lt('fecha_recepcion', p2)
       .order('fecha_recepcion', { ascending: false });
@@ -62,16 +62,31 @@ function renderVentas(rows, emailsColab) {
     const elimVtBtn   = `<button class="btn btn-danger" onclick="event.stopPropagation();abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>`;
     const esColab     = emailsColab && emailsColab.has((r.remitente_email||'').trim().toLowerCase());
     const moverBtn    = esColab && !esCancelado ? `<button class="btn btn-mover-inst" onclick="event.stopPropagation();reclasificarComoInstitucional(${r.id})" title="Mover a Gestión de Copias (es colaborador/profe)"><i class="fa fa-arrow-right-to-bracket fa-xs"></i></button>` : '';
+    const manualBadge = r.es_manual ? `<span style="font-size:10px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;background:var(--s3);color:var(--muted);border-radius:4px;padding:2px 6px">Manual</span>` : '';
+    let accionBtn = '';
+    if (!esCancelado && trabs.length) {
+      if (r.recepcion_confirmada) {
+        accionBtn = `<span style="font-size:11px;font-weight:600;color:var(--green)"><i class="fa fa-circle-check fa-xs"></i> Confirmado</span>`;
+      } else if (r.fecha_entrega) {
+        accionBtn = `<button class="btn-entrega-conf" onclick="event.stopPropagation();abrirConfirmarEntregaVentasById(${r.id})" title="Confirmar recepción manualmente"><i class="fa fa-circle-check fa-xs"></i> Confirmar</button>`;
+      } else {
+        accionBtn = `<button class="btn-entregar-vt" onclick="event.stopPropagation();abrirEntregarVentasById(${r.id})" title="Marcar como entregado"><i class="fa fa-box-open fa-xs"></i> Entregar</button>`;
+      }
+    }
+    const lineaId = r.es_manual
+      ? (r.remitente_nombre || 'Solicitud manual')
+      : (r.remitente_email || r.remitente_nombre || '—');
     return `<div class="vt-card" ${!esCancelado ? `onclick="abrirModalPersonal(${r.id})"` : 'style="opacity:.65;cursor:default"'}>
       <div class="vt-top">
         <div class="vt-info">
-          <div class="vt-email">${r.remitente_email}</div>
+          <div class="vt-email">${lineaId}</div>
           <div class="vt-date">${fmtFecha(r.fecha_recepcion)}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${moverBtn}${cancelVtBtn}${elimVtBtn}</div>
+        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${manualBadge}${moverBtn}${cancelVtBtn}${elimVtBtn}</div>
       </div>
       <div class="vt-asunto">${r.asunto||'—'}</div>
       ${finHtml}
+      ${accionBtn ? `<div style="padding:4px 0 2px;text-align:right">${accionBtn}</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -106,10 +121,16 @@ function buscarVentasDebounce() { clearTimeout(_buscarVentasTimer); _buscarVenta
 // ── MODAL PERSONAL ────────────────────────────────────────────
 async function abrirModalPersonal(solicitudId) {
   _idPersonal = solicitudId;
+  _esManualPersonal = false;
+  _esCandidatoColab = false;
   _archivosPersonalDisp = [];
   _archivosPersonalAsig = new Set();
-  ['mp-nombre','mp-precio','mp-pagado','mp-obs'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  ['mp-nombre','mp-pagado','mp-obs'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('mp-precio').value = '0';
   document.getElementById('mp-saldo-preview').style.display = 'none';
+  document.getElementById('mp-precio-preview').style.display = 'none';
+  document.getElementById('mp-color-opts').style.display = 'none';
+  document.getElementById('mp-colab-badge').style.display = 'none';
   document.getElementById('mp-arch-list').innerHTML = '<span style="color:var(--muted);font-size:13px">Cargando...</span>';
   document.getElementById('mp-trab-section').style.display = 'none';
   document.getElementById('mp-fin-bar').style.display = 'none';
@@ -117,7 +138,7 @@ async function abrirModalPersonal(solicitudId) {
   try {
     const [solRes, trabRes] = await Promise.all([
       _sb.from('bib_solicitudes')
-        .select('id,id_solicitud,remitente_email,asunto,bib_documentos(id,nombre_archivo,tipo_mime,storage_path)')
+        .select('id,id_solicitud,remitente_email,remitente_nombre,asunto,es_manual,bib_documentos(id,nombre_archivo,tipo_mime,storage_path)')
         .eq('id', solicitudId).single(),
       _sb.from('bib_trabajos_personal')
         .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
@@ -125,14 +146,49 @@ async function abrirModalPersonal(solicitudId) {
     ]);
     if (solRes.error) throw solRes.error;
     const sol = solRes.data;
-    document.getElementById('mp-email').textContent  = sol.id_solicitud || sol.remitente_email;
+    _esManualPersonal = sol.es_manual || false;
+
+    // Check colaborador por email
+    if (sol.remitente_email) {
+      const { data: colabMatch } = await _sb.from('bib_colaboradores_correos')
+        .select('id').ilike('email', sol.remitente_email.trim()).limit(1);
+      _esCandidatoColab = !!(colabMatch && colabMatch.length);
+    }
+
+    const lineaId = _esManualPersonal
+      ? (sol.remitente_nombre || 'Solicitud manual')
+      : (sol.id_solicitud || sol.remitente_email || '—');
+    document.getElementById('mp-email').textContent  = lineaId;
     document.getElementById('mp-asunto').textContent = sol.asunto || '—';
     document.getElementById('mp-nombre').value = sol.asunto || '';
     _archivosPersonalDisp = sol.bib_documentos || [];
     const trabajos = trabRes.data || [];
     trabajos.forEach(t => (t.archivos||[]).forEach(a => _archivosPersonalAsig.add(a.id || a.nombre_archivo)));
-    renderArchivosPersonal();
-    _renderTrabajosPersonalList(trabajos, sol.remitente_email);
+
+    // Mostrar badge de colaborador
+    if (_esCandidatoColab) document.getElementById('mp-colab-badge').style.display = '';
+
+    if (_esManualPersonal) {
+      document.getElementById('mp-arch-group').style.display = 'none';
+      document.getElementById('mp-manual-config').style.display = '';
+      document.getElementById('mp-man-copias').value = '1';
+      document.getElementById('mp-man-paginas').value = '1';
+      const rBN    = document.querySelector('input[name="mp-man-tipo"][value="Blanco y negro"]');
+      const rUna   = document.querySelector('input[name="mp-man-modo"][value="Una cara"]');
+      const rCarta = document.querySelector('input[name="mp-man-hoja"][value="Carta"]');
+      if (rBN)    rBN.checked    = true;
+      if (rUna)   rUna.checked   = true;
+      if (rCarta) rCarta.checked = true;
+      document.getElementById('btn-agregar-pers').disabled = false;
+      document.getElementById('btn-agregar-pers').style.opacity = '';
+      document.getElementById('msg-todos-pers').style.display = 'none';
+    } else {
+      document.getElementById('mp-arch-group').style.display = '';
+      document.getElementById('mp-manual-config').style.display = 'none';
+      renderArchivosPersonal();
+    }
+    recalcPrecioPersonal();
+    _renderTrabajosPersonalList(trabajos, sol.remitente_email || sol.remitente_nombre || '');
   } catch(e) { toast('Error al cargar: ' + e.message, 'error'); }
 }
 
@@ -172,13 +228,20 @@ function renderArchivosPersonal() {
         <div class="fc-radios">
           <div class="fc-label">Tipo</div>
           <div class="fc-radio-group">
-            <label class="fc-radio-lbl"><input type="radio" name="pftipo-${fid}" value="Blanco y negro" checked> B&N</label>
-            <label class="fc-radio-lbl"><input type="radio" name="pftipo-${fid}" value="Color"> Color</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pftipo-${fid}" value="Blanco y negro" checked onchange="onTipoFileChange()"> B&N</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pftipo-${fid}" value="Color" onchange="onTipoFileChange()"> Color</label>
           </div>
           <div class="fc-label" style="margin-top:6px">Cara</div>
           <div class="fc-radio-group">
-            <label class="fc-radio-lbl"><input type="radio" name="pfmodo-${fid}" value="Una cara" checked> Una cara</label>
-            <label class="fc-radio-lbl"><input type="radio" name="pfmodo-${fid}" value="Doble cara"> Doble cara</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pfmodo-${fid}" value="Una cara" checked onchange="recalcPrecioPersonal()"> Una cara</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pfmodo-${fid}" value="Doble cara" onchange="recalcPrecioPersonal()"> Doble cara</label>
+          </div>
+          <div class="fc-label" style="margin-top:6px">Tamaño</div>
+          <div class="fc-radio-group">
+            <label class="fc-radio-lbl"><input type="radio" name="pfhoja-${fid}" value="Carta" checked> Carta</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pfhoja-${fid}" value="Oficio"> Oficio</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pfhoja-${fid}" value="Doble Carta"> Doble Carta</label>
+            <label class="fc-radio-lbl"><input type="radio" name="pfhoja-${fid}" value="A4"> A4</label>
           </div>
         </div>
       </div>
@@ -191,6 +254,7 @@ function toggleArchivoPers(fid) {
   const conf = document.getElementById('pfconf-' + fid);
   if (chk) chk.checked = !chk.checked;
   if (conf) conf.classList.toggle('open', chk?.checked);
+  onTipoFileChange();
 }
 
 function _renderTrabajosPersonalList(trabajos, emailRemit) {
@@ -226,7 +290,94 @@ function _renderTrabajosPersonalList(trabajos, emailRemit) {
   }).join('');
 }
 
-function recalcSaldo() {
+function recalcSaldo() { recalcPrecioPersonal(); }
+
+// ── PRECIO AUTOMÁTICO ─────────────────────────────────────────
+function _calcTrabajoPersonal() {
+  let totalHojas = 0;
+  const archivos = [];
+  const nuevasAsig = new Set();
+
+  if (_esManualPersonal) {
+    const copias  = parseInt(document.getElementById('mp-man-copias')?.value)  || 1;
+    const paginas = parseInt(document.getElementById('mp-man-paginas')?.value) || 1;
+    const tipo    = document.querySelector('input[name="mp-man-tipo"]:checked')?.value || 'Blanco y negro';
+    const modo    = document.querySelector('input[name="mp-man-modo"]:checked')?.value || 'Una cara';
+    const hoja    = document.querySelector('input[name="mp-man-hoja"]:checked')?.value || 'Carta';
+    const hojas   = modo === 'Doble cara' ? copias * Math.ceil(paginas / 2) : copias * paginas;
+    totalHojas    = hojas;
+    const nombre  = document.getElementById('mp-nombre')?.value.trim() || 'Trabajo manual';
+    archivos.push({ nombre_archivo: nombre, copias, paginas, tipo, modo, tamano_hoja: hoja, hojas });
+  } else {
+    for (const f of _archivosPersonalDisp) {
+      const fid = f.id || f.nombre_archivo;
+      const chk = document.getElementById('pfchk-' + fid);
+      if (!chk?.checked) continue;
+      const copias  = parseInt(document.getElementById('pfcopias-' + fid)?.value)  || 1;
+      const paginas = parseInt(document.getElementById('pfpaginas-' + fid)?.value) || 1;
+      const tipo    = document.querySelector(`input[name="pftipo-${fid}"]:checked`)?.value || 'Blanco y negro';
+      const modo    = document.querySelector(`input[name="pfmodo-${fid}"]:checked`)?.value || 'Una cara';
+      const hoja    = document.querySelector(`input[name="pfhoja-${fid}"]:checked`)?.value || 'Carta';
+      const hojas   = modo === 'Doble cara' ? copias * Math.ceil(paginas / 2) : copias * paginas;
+      archivos.push({ id: f.id, nombre_archivo: f.nombre_archivo, copias, paginas, tipo, modo, tamano_hoja: hoja, hojas });
+      totalHojas += hojas;
+      nuevasAsig.add(fid);
+    }
+  }
+
+  const tipo = _esManualPersonal
+    ? (document.querySelector('input[name="mp-man-tipo"]:checked')?.value || 'Blanco y negro')
+    : _getPrimerTipoSeleccionado();
+
+  let precioUnitario = 0;
+  let porcentajeColor = null;
+  let modoToner = null;
+
+  if (tipo === 'Color') {
+    const pct        = parseInt(document.querySelector('input[name="mp-color-pct"]:checked')?.value || '100');
+    const tonerMode  = document.querySelector('input[name="mp-toner"]:checked')?.value || 'ahorro';
+    const colorBase  = Math.ceil(pct / 25) * 500;
+    const tonerExtra = tonerMode === 'full' ? 500 : 0;
+    precioUnitario   = colorBase + tonerExtra;
+    porcentajeColor  = pct;
+    modoToner        = tonerMode;
+  } else {
+    precioUnitario = _esCandidatoColab ? 200 : 300;
+  }
+
+  _precioUnitarioCalculado = precioUnitario;
+  return { precioTotal: totalHojas * precioUnitario, totalHojas, archivos, nuevasAsig, porcentajeColor, modoToner };
+}
+
+function recalcPrecioPersonal() {
+  const { precioTotal, totalHojas, porcentajeColor, modoToner } = _calcTrabajoPersonal();
+  document.getElementById('mp-precio').value = precioTotal;
+
+  const tipo = _esManualPersonal
+    ? (document.querySelector('input[name="mp-man-tipo"]:checked')?.value || 'Blanco y negro')
+    : _getPrimerTipoSeleccionado();
+
+  const preview  = document.getElementById('mp-precio-preview');
+  const detalleEl = document.getElementById('mp-precio-detalle');
+  const calcEl   = document.getElementById('mp-precio-calc');
+  if (totalHojas > 0 && precioTotal > 0) {
+    preview.style.display = '';
+    let detalle = '';
+    if (tipo === 'Color') {
+      const tonerMode = document.querySelector('input[name="mp-toner"]:checked')?.value || 'ahorro';
+      detalle = `Color ${porcentajeColor}%${tonerMode === 'full' ? ' + Full toner' : ''} · ${totalHojas} hoja${totalHojas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
+    } else {
+      detalle = `B&N${_esCandidatoColab ? ' (colaborador)' : ''} · ${totalHojas} hoja${totalHojas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
+    }
+    detalleEl.textContent = detalle;
+    calcEl.textContent    = fmtPesos(precioTotal);
+  } else {
+    preview.style.display = 'none';
+  }
+  recalcSaldoPersonal();
+}
+
+function recalcSaldoPersonal() {
   const precio = parseFloat(document.getElementById('mp-precio').value) || 0;
   const pagado = parseFloat(document.getElementById('mp-pagado').value) || 0;
   const prev   = document.getElementById('mp-saldo-preview');
@@ -240,37 +391,51 @@ function recalcSaldo() {
   }
 }
 
-async function agregarTrabajoPersonal(evt) {
-  const nombre = document.getElementById('mp-nombre').value.trim();
-  const precio = parseFloat(document.getElementById('mp-precio').value) || 0;
-  const pagado = Math.min(parseFloat(document.getElementById('mp-pagado').value)||0, precio);
-  const obs    = document.getElementById('mp-obs').value.trim();
-  if (!nombre) { toast('Escribe el nombre del trabajo', 'error'); return; }
-  if (precio <= 0) { toast('El precio debe ser mayor a 0', 'error'); return; }
-
-  const archivos = [];
-  let totalHojas = 0;
-  const nuevasAsig = new Set();
+function _getPrimerTipoSeleccionado() {
   for (const f of _archivosPersonalDisp) {
     const fid = f.id || f.nombre_archivo;
     const chk = document.getElementById('pfchk-' + fid);
     if (!chk?.checked) continue;
-    const copias  = parseInt(document.getElementById('pfcopias-'+fid)?.value)  || 1;
-    const paginas = parseInt(document.getElementById('pfpaginas-'+fid)?.value) || 1;
-    const tipo    = document.querySelector(`input[name="pftipo-${fid}"]:checked`)?.value || 'Blanco y negro';
-    const modo    = document.querySelector(`input[name="pfmodo-${fid}"]:checked`)?.value || 'Una cara';
-    const hojas   = modo === 'Doble cara' ? copias * Math.ceil(paginas/2) : copias * paginas;
-    archivos.push({ id: f.id, nombre_archivo: f.nombre_archivo, copias, paginas, tipo, modo, hojas });
-    totalHojas += hojas;
-    nuevasAsig.add(fid);
+    return document.querySelector(`input[name="pftipo-${fid}"]:checked`)?.value || 'Blanco y negro';
   }
+  return 'Blanco y negro';
+}
+
+function onTipoManualChange() {
+  const tipo = document.querySelector('input[name="mp-man-tipo"]:checked')?.value || 'Blanco y negro';
+  document.getElementById('mp-color-opts').style.display = tipo === 'Color' ? '' : 'none';
+  recalcPrecioPersonal();
+}
+
+function onTipoFileChange() {
+  const anyColor = _archivosPersonalDisp.some(f => {
+    const fid = f.id || f.nombre_archivo;
+    const chk = document.getElementById('pfchk-' + fid);
+    if (!chk?.checked) return false;
+    return document.querySelector(`input[name="pftipo-${fid}"]:checked`)?.value === 'Color';
+  });
+  document.getElementById('mp-color-opts').style.display = anyColor ? '' : 'none';
+  recalcPrecioPersonal();
+}
+
+async function agregarTrabajoPersonal(evt) {
+  const nombre = document.getElementById('mp-nombre').value.trim();
+  const obs    = document.getElementById('mp-obs').value.trim();
+  if (!nombre) { toast('Escribe el nombre del trabajo', 'error'); return; }
+
+  const { precioTotal, totalHojas, archivos, nuevasAsig, porcentajeColor, modoToner } = _calcTrabajoPersonal();
+  if (precioTotal <= 0) { toast('Selecciona al menos un archivo o configura el trabajo', 'error'); return; }
+
+  const pagado = Math.min(parseFloat(document.getElementById('mp-pagado').value)||0, precioTotal);
 
   const btn = evt.currentTarget;
   btn.disabled = true; btn.classList.add('loading');
   try {
     const { data: trab, error: tErr } = await _sb.from('bib_trabajos_personal').insert({
       solicitud_id: _idPersonal, nombre, archivos, total_hojas: totalHojas,
-      precio_total: precio, valor_pagado: 0, observaciones: obs || null
+      precio_total: precioTotal, precio_unitario: _precioUnitarioCalculado,
+      porcentaje_color: porcentajeColor, modo_toner: modoToner,
+      valor_pagado: 0, observaciones: obs || null
     }).select().single();
     if (tErr) throw tErr;
 
@@ -283,18 +448,28 @@ async function agregarTrabajoPersonal(evt) {
     }
 
     nuevasAsig.forEach(fid => _archivosPersonalAsig.add(fid));
-    ['mp-nombre','mp-precio','mp-pagado','mp-obs'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    ['mp-nombre','mp-pagado','mp-obs'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+    document.getElementById('mp-precio').value = '0';
     document.getElementById('mp-saldo-preview').style.display = 'none';
-    document.getElementById('mp-nombre').value = '';
+    document.getElementById('mp-precio-preview').style.display = 'none';
+    document.getElementById('mp-color-opts').style.display = 'none';
+    if (_esManualPersonal) {
+      document.getElementById('mp-man-copias').value = '1';
+      document.getElementById('mp-man-paginas').value = '1';
+      const rBN    = document.querySelector('input[name="mp-man-tipo"][value="Blanco y negro"]');
+      const rCarta = document.querySelector('input[name="mp-man-hoja"][value="Carta"]');
+      if (rBN)    rBN.checked    = true;
+      if (rCarta) rCarta.checked = true;
+    }
     toast('Trabajo registrado', 'success');
 
     const [trabRes, solRes] = await Promise.all([
       _sb.from('bib_trabajos_personal').select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
         .eq('solicitud_id', _idPersonal).order('created_at', { ascending: true }),
-      _sb.from('bib_solicitudes').select('remitente_email').eq('id', _idPersonal).single()
+      _sb.from('bib_solicitudes').select('remitente_email,remitente_nombre').eq('id', _idPersonal).single()
     ]);
-    renderArchivosPersonal();
-    _renderTrabajosPersonalList(trabRes.data||[], solRes.data?.remitente_email||'');
+    if (!_esManualPersonal) renderArchivosPersonal();
+    _renderTrabajosPersonalList(trabRes.data||[], solRes.data?.remitente_email || solRes.data?.remitente_nombre || '');
     if (_pagina === 'ventas') cargarVentas();
   } catch(e) {
     toast('Error al guardar: ' + e.message, 'error');
@@ -340,4 +515,138 @@ async function confirmarAbono() {
     if (_pagina === 'caja')   cargarCaja();
   } catch(e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.disabled = false; btn.classList.remove('loading'); }
+}
+
+// ── NUEVA SOLICITUD MANUAL ─────────────────────────────────────
+function abrirModalNuevaSolicitudManual() {
+  document.getElementById('mnm-nombre').value = '';
+  document.getElementById('mnm-email').value = '';
+  document.getElementById('mnm-asunto').value = '';
+  document.getElementById('mnm-colab-badge').style.display = 'none';
+  document.getElementById('modal-nueva-manual').classList.add('open');
+  setTimeout(() => document.getElementById('mnm-nombre').focus(), 80);
+}
+
+function onMnmEmailChange() {
+  clearTimeout(_mnmEmailTimer);
+  _mnmEmailTimer = setTimeout(async () => {
+    const email = document.getElementById('mnm-email').value.trim().toLowerCase();
+    const badge = document.getElementById('mnm-colab-badge');
+    if (!email) { badge.style.display = 'none'; return; }
+    const { data } = await _sb.from('bib_colaboradores_correos')
+      .select('id').ilike('email', email).limit(1);
+    badge.style.display = (data && data.length) ? '' : 'none';
+  }, 400);
+}
+
+async function confirmarNuevaSolicitudManual() {
+  const nombre = document.getElementById('mnm-nombre').value.trim();
+  const email  = document.getElementById('mnm-email').value.trim();
+  const asunto = document.getElementById('mnm-asunto').value.trim();
+  if (!asunto) { toast('Escribe la descripción del trabajo', 'error'); return; }
+  const btn = document.getElementById('btn-conf-manual');
+  btn.disabled = true; btn.classList.add('loading');
+  try {
+    const { data: sol, error } = await _sb.from('bib_solicitudes').insert({
+      tipo_remitente: 'personal',
+      es_manual: true,
+      remitente_nombre: nombre || null,
+      remitente_email: email || null,
+      asunto: asunto,
+      estado: 'pendiente',
+      fecha_recepcion: new Date().toISOString()
+    }).select().single();
+    if (error) throw error;
+    cerrarModal('modal-nueva-manual');
+    toast('Solicitud creada', 'success');
+    cargarVentas();
+    abrirModalPersonal(sol.id);
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('loading');
+  }
+}
+
+// ── ENTREGAR VENTAS (paso 1) ───────────────────────────────────
+async function abrirEntregarVentasById(solicitudId) {
+  const { data, error } = await _sb.from('bib_solicitudes')
+    .select('id,remitente_email,remitente_nombre,asunto').eq('id', solicitudId).single();
+  if (error) { toast('Error al cargar solicitud', 'error'); return; }
+  _confirmarEntregaVentasId = data.id;
+  const info = data.remitente_nombre || data.remitente_email || data.asunto || ('Solicitud #' + solicitudId);
+  document.getElementById('mev-info').textContent = info;
+  const emailRow  = document.getElementById('mev-email-row');
+  const emailDest = document.getElementById('mev-email-dest');
+  if (data.remitente_email) {
+    emailRow.style.display = '';
+    emailDest.textContent  = data.remitente_email;
+    document.getElementById('mev-send-email').checked = true;
+  } else {
+    emailRow.style.display = 'none';
+  }
+  document.getElementById('modal-entregar-ventas').classList.add('open');
+}
+
+async function marcarEntregadoVentas() {
+  const btn = document.getElementById('btn-marcar-entregado');
+  btn.disabled = true; btn.classList.add('loading');
+  try {
+    const ahora = new Date().toISOString();
+    const { data: sol, error } = await _sb.from('bib_solicitudes')
+      .update({ fecha_entrega: ahora })
+      .eq('id', _confirmarEntregaVentasId)
+      .select('id,remitente_email,remitente_nombre,asunto').single();
+    if (error) throw error;
+
+    const sendEmail = document.getElementById('mev-send-email')?.checked;
+    if (sendEmail && sol.remitente_email) {
+      gasCall('enviarCorreo', {
+        tipo: 'entregado',
+        destinatario: sol.remitente_email,
+        asunto: sol.asunto,
+        nombreRecibe: sol.remitente_nombre || sol.remitente_email,
+        solicitudUuid: String(_confirmarEntregaVentasId),
+        fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+      }).catch(() => {});
+    }
+
+    toast('Marcado como entregado' + (sendEmail && sol.remitente_email ? ' · Correo enviado' : ''), 'success');
+    cerrarModal('modal-entregar-ventas');
+    cargarVentas();
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('loading');
+  }
+}
+
+// ── CONFIRMAR RECEPCIÓN VENTAS (paso 2, manual) ────────────────
+async function abrirConfirmarEntregaVentasById(solicitudId) {
+  const { data, error } = await _sb.from('bib_solicitudes')
+    .select('id,remitente_nombre,remitente_email,asunto').eq('id', solicitudId).single();
+  if (error) { toast('Error al cargar solicitud', 'error'); return; }
+  _confirmarEntregaVentasId = data.id;
+  const info = data.remitente_nombre || data.remitente_email || data.asunto || ('Solicitud #' + solicitudId);
+  document.getElementById('mcev-info').textContent = info;
+  document.getElementById('modal-confirmar-entrega-ventas').classList.add('open');
+}
+
+async function confirmarEntregaVentas() {
+  const btn = document.getElementById('btn-conf-entrega-ventas');
+  btn.disabled = true; btn.classList.add('loading');
+  try {
+    const ahora = new Date().toISOString();
+    const { error } = await _sb.from('bib_solicitudes')
+      .update({ recepcion_confirmada: true, recepcion_confirmada_en: ahora })
+      .eq('id', _confirmarEntregaVentasId);
+    if (error) throw error;
+    toast('Recepción confirmada', 'success');
+    cerrarModal('modal-confirmar-entrega-ventas');
+    cargarVentas();
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('loading');
+  }
 }
