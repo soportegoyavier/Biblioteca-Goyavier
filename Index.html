@@ -221,6 +221,9 @@
             <i class="fa fa-magnifying-glass" style="color:var(--dim);font-size:12px"></i>
             <input type="text" id="inp-buscar-ventas" placeholder="Buscar..." oninput="buscarVentasDebounce()">
           </div>
+          <button class="btn btn-primary" onclick="abrirModalNuevaSolicitudManual()" style="margin-left:auto;white-space:nowrap">
+            <i class="fa fa-plus fa-sm"></i> Manual
+          </button>
         </div>
         <div id="ventas-list" class="vt-list"><div class="loader-wrap"><div class="loader"></div></div></div>
       </div>
@@ -438,14 +441,111 @@
         </div>
       </div>
 
+      <!-- Configuración manual (visible solo en solicitudes es_manual=true) -->
+      <div id="mp-manual-config" style="display:none;margin-bottom:12px">
+        <div class="fg" style="margin-bottom:8px">
+          <div class="fgroup">
+            <label>Copias</label>
+            <input type="number" id="mp-man-copias" class="fc" value="1" min="1" oninput="recalcPrecioPersonal()">
+          </div>
+          <div class="fgroup">
+            <label>Páginas</label>
+            <input type="number" id="mp-man-paginas" class="fc" value="1" min="1" oninput="recalcPrecioPersonal()">
+          </div>
+        </div>
+        <div class="fg" style="margin-bottom:8px;gap:16px">
+          <div class="fgroup" style="margin:0">
+            <label style="margin-bottom:6px">Tipo</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+                <input type="radio" name="mp-man-tipo" value="Blanco y negro" checked onchange="onTipoManualChange()"> B&amp;N
+              </label>
+              <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+                <input type="radio" name="mp-man-tipo" value="Color" onchange="onTipoManualChange()"> Color
+              </label>
+            </div>
+          </div>
+          <div class="fgroup" style="margin:0">
+            <label style="margin-bottom:6px">Cara</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+                <input type="radio" name="mp-man-modo" value="Una cara" checked onchange="recalcPrecioPersonal()"> Una cara
+              </label>
+              <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+                <input type="radio" name="mp-man-modo" value="Doble cara" onchange="recalcPrecioPersonal()"> Doble cara
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="fgroup" style="margin:0">
+          <label style="margin-bottom:6px">Tamaño de hoja</label>
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-man-hoja" value="Carta" checked> Carta
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-man-hoja" value="Oficio"> Oficio
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-man-hoja" value="Doble Carta"> Doble Carta
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-man-hoja" value="A4"> A4
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Opciones de color y toner (visibles cuando tipo=Color) -->
+      <div id="mp-color-opts" style="display:none;margin-bottom:8px;background:var(--s2);border-radius:var(--radius-sm);padding:10px 12px">
+        <div class="fgroup" style="margin-bottom:8px">
+          <label style="margin-bottom:6px">Porcentaje de color por página</label>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-color-pct" value="25" onchange="recalcPrecioPersonal()"> 25%
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-color-pct" value="50" onchange="recalcPrecioPersonal()"> 50%
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-color-pct" value="75" onchange="recalcPrecioPersonal()"> 75%
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-color-pct" value="100" checked onchange="recalcPrecioPersonal()"> 100%
+            </label>
+          </div>
+        </div>
+        <div class="fgroup" style="margin:0">
+          <label style="margin-bottom:6px">Modo de toner</label>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-toner" value="ahorro" checked onchange="recalcPrecioPersonal()"> Ahorro de toner
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="mp-toner" value="full" onchange="recalcPrecioPersonal()"> Full toner (+$500/hoja)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Preview de precio calculado automáticamente -->
+      <div id="mp-precio-preview" style="display:none;background:var(--s3);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:8px;font-size:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <span id="mp-precio-detalle" style="color:var(--muted)">—</span>
+          <strong id="mp-precio-calc" style="white-space:nowrap">$0</strong>
+        </div>
+      </div>
+      <!-- Badge de colaborador -->
+      <div id="mp-colab-badge" style="display:none;margin-bottom:8px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
+        <i class="fa fa-tag fa-xs"></i> Precio colaborador activo ($200/hoja B&amp;N)
+      </div>
+
+      <input type="hidden" id="mp-precio" value="0">
+
       <div class="fg" style="margin-bottom:8px">
         <div class="fgroup">
-          <label>Precio total <span class="req">*</span></label>
-          <input type="number" id="mp-precio" class="fc" placeholder="0" min="0" step="100" oninput="recalcSaldo()">
-        </div>
-        <div class="fgroup">
           <label>Pago recibido</label>
-          <input type="number" id="mp-pagado" class="fc" placeholder="0" min="0" step="100" oninput="recalcSaldo()">
+          <input type="number" id="mp-pagado" class="fc" placeholder="0" min="0" step="100" oninput="recalcSaldoPersonal()">
         </div>
       </div>
       <div id="mp-saldo-preview" style="display:none;margin-bottom:12px;background:var(--s3);border-radius:var(--radius-sm);padding:8px 12px;font-size:13px">
@@ -468,6 +568,104 @@
     </div>
     <div class="mf">
       <button class="btn btn-ghost" onclick="cerrarModal('modal-personal')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL NUEVA SOLICITUD MANUAL -->
+<div class="mo" id="modal-nueva-manual">
+  <div class="mc" style="max-width:440px">
+    <div class="mh">
+      <div class="mh-ico amber"><i class="fa fa-user-plus" style="color:var(--amber)"></i></div>
+      <div class="mh-info">
+        <h3>Nueva Solicitud Manual</h3>
+        <div class="mh-sub">Estudiante o persona sin correo electrónico</div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-nueva-manual')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <div class="fgroup">
+        <label>Nombre del solicitante <span style="color:var(--muted);font-size:11px">(opcional)</span></label>
+        <input type="text" id="mnm-nombre" class="fc" placeholder="Ej: Juan Pérez">
+      </div>
+      <div class="fgroup">
+        <label>Email <span style="color:var(--muted);font-size:11px">(opcional — para enviar confirmación)</span></label>
+        <input type="email" id="mnm-email" class="fc" placeholder="correo@ejemplo.com" oninput="onMnmEmailChange()">
+        <div id="mnm-colab-badge" style="display:none;margin-top:5px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
+          <i class="fa fa-tag fa-xs"></i> Es colaborador — precio B&amp;N $200/hoja
+        </div>
+      </div>
+      <div class="fgroup">
+        <label>Descripción / Asunto <span class="req">*</span></label>
+        <input type="text" id="mnm-asunto" class="fc" placeholder="Ej: Taller de Matemáticas" onkeydown="if(event.key==='Enter')confirmarNuevaSolicitudManual()">
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-nueva-manual')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-conf-manual" onclick="confirmarNuevaSolicitudManual()">
+        <i class="fa fa-arrow-right fa-sm"></i> Continuar
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CONFIRMAR ENTREGA VENTAS -->
+<!-- MODAL MARCAR ENTREGADO (paso 1: envía correo con link) -->
+<div class="mo" id="modal-entregar-ventas">
+  <div class="mc" style="max-width:420px">
+    <div class="mh">
+      <div class="mh-ico amber"><i class="fa fa-hand-holding-box" style="color:var(--amber)"></i></div>
+      <div class="mh-info">
+        <h3>Marcar como entregado</h3>
+        <div class="mh-sub" id="mev-info"></div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-entregar-ventas')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+        Registra que las copias fueron entregadas al solicitante.
+      </p>
+      <div id="mev-email-row" style="display:none">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:3px">Correo del solicitante:</div>
+        <div id="mev-email-dest" style="font-weight:600;font-size:13px;margin-bottom:10px"></div>
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="mev-send-email" checked> Enviar correo con link de confirmación
+        </label>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-entregar-ventas')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-marcar-entregado" onclick="marcarEntregadoVentas()">
+        <i class="fa fa-box-open fa-sm"></i> Marcar entregado
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CONFIRMAR RECEPCIÓN (paso 2: confirmación manual desde la página) -->
+<div class="mo" id="modal-confirmar-entrega-ventas">
+  <div class="mc" style="max-width:420px">
+    <div class="mh">
+      <div class="mh-ico green"><i class="fa fa-circle-check" style="color:var(--green)"></i></div>
+      <div class="mh-info">
+        <h3>Confirmar recepción</h3>
+        <div class="mh-sub" id="mcev-info"></div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-confirmar-entrega-ventas')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:4px">
+        Confirmar manualmente que el solicitante recibió las copias.
+      </p>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:0">
+        Usa esto cuando la persona no pueda confirmar desde el correo.
+      </p>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-confirmar-entrega-ventas')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-conf-entrega-ventas" onclick="confirmarEntregaVentas()">
+        <i class="fa fa-circle-check fa-sm"></i> Confirmar recepción
+      </button>
     </div>
   </div>
 </div>
