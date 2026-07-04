@@ -7,7 +7,7 @@ async function cargarVentas() {
     const p2 = new Date(_ano, _mes + 1, 1).toISOString();
     const buscar = document.getElementById('inp-buscar-ventas')?.value?.trim() || '';
     let q = _sb.from('bib_solicitudes')
-      .select('id,fecha_recepcion,remitente_email,remitente_nombre,asunto,estado,es_manual,fecha_entrega,recepcion_confirmada,bib_trabajos_personal(id,precio_total,valor_pagado)')
+      .select('id,fecha_recepcion,remitente_email,remitente_nombre,asunto,estado,es_manual,fecha_entrega,recepcion_confirmada,convertido_a_movimiento,bib_trabajos_personal(id,precio_total,valor_pagado)')
       .eq('tipo_remitente', 'personal')
       .gte('fecha_recepcion', p1).lt('fecha_recepcion', p2)
       .order('fecha_recepcion', { ascending: false });
@@ -62,6 +62,8 @@ function renderVentas(rows, emailsColab) {
     const elimVtBtn   = `<button class="btn btn-danger" onclick="event.stopPropagation();abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>`;
     const esColab     = emailsColab && emailsColab.has((r.remitente_email||'').trim().toLowerCase());
     const moverBtn    = esColab && !esCancelado ? `<button class="btn btn-mover-inst" onclick="event.stopPropagation();reclasificarComoInstitucional(${r.id})" title="Mover a Gestión de Copias (es colaborador/profe)"><i class="fa fa-arrow-right-to-bracket fa-xs"></i></button>` : '';
+    const materialesBtn = !esCancelado && !r.convertido_a_movimiento
+      ? `<button class="btn btn-ghost" onclick="event.stopPropagation();enviarASolicitudMateriales(${r.id})" title="Enviar a Materiales"><i class="fa fa-box-archive fa-xs"></i></button>` : '';
     const manualBadge = r.es_manual ? `<span style="font-size:10px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;background:var(--s3);color:var(--muted);border-radius:4px;padding:2px 6px">Manual</span>` : '';
     let accionBtn = '';
     if (!esCancelado && trabs.length) {
@@ -82,7 +84,7 @@ function renderVentas(rows, emailsColab) {
           <div class="vt-email">${lineaId}</div>
           <div class="vt-date">${fmtFecha(r.fecha_recepcion)}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${manualBadge}${moverBtn}${cancelVtBtn}${elimVtBtn}</div>
+        <div style="display:flex;align-items:center;gap:6px">${badgeHtml}${manualBadge}${moverBtn}${materialesBtn}${cancelVtBtn}${elimVtBtn}</div>
       </div>
       <div class="vt-asunto">${r.asunto||'—'}</div>
       ${finHtml}

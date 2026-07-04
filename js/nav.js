@@ -7,7 +7,7 @@ function navTo(page, el, mobId) {
   const titulos = {
     dashboard:'Dashboard', copias:'Gestión de Copias', reportes:'Reportes',
     ventas:'Ventas / Personal', caja:'Caja', notificaciones:'Notificaciones',
-    colaboradores:'Colaboradores'
+    colaboradores:'Colaboradores', materiales:'Materiales y Préstamos'
   };
   document.getElementById('topbar-title').textContent = titulos[page] || page;
 
@@ -29,6 +29,19 @@ function navTo(page, el, mobId) {
   if (page === 'caja')           { _initCajaFecha(); cargarCaja(); }
   if (page === 'notificaciones') { cargarNotificaciones(); cargarTiposCopia(); }
   if (page === 'colaboradores')  cargarColaboradores();
+  if (page === 'materiales')     cargarMateriales();
+
+  toggleMobileMenu(false); // si se navegó desde el drawer móvil, se cierra solo
+}
+
+// ── DRAWER MÓVIL (hamburguesa) ─────────────────────────────────
+function toggleMobileMenu(forzar) {
+  const sb = document.querySelector('.sb');
+  const bg = document.querySelector('.sb-backdrop');
+  if (!sb || !bg) return;
+  const abrir = forzar !== undefined ? forzar : !sb.classList.contains('open');
+  sb.classList.toggle('open', abrir);
+  bg.classList.toggle('open', abrir);
 }
 
 function refreshPage() {
@@ -39,6 +52,7 @@ function refreshPage() {
   else if (_pagina === 'caja')           cargarCaja();
   else if (_pagina === 'notificaciones') { cargarNotificaciones(); cargarTiposCopia(); }
   else if (_pagina === 'colaboradores')  cargarColaboradores();
+  else if (_pagina === 'materiales')     cargarMateriales();
 }
 
 // ── MES ──────────────────────────────────────────────────────

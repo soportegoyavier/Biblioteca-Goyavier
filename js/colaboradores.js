@@ -186,7 +186,9 @@ async function abrirPickerDestinatarios(onConfirm, onCancel, preSelected = [], s
   _pickerTipoCopia = 'General';
 
   document.getElementById('picker-list').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
-  document.getElementById('modal-destinatarios').classList.add('open');
+  const _modalDest = document.getElementById('modal-destinatarios');
+  document.body.appendChild(_modalDest); // asegura que quede por encima si se abre desde otro modal (.mo comparten z-index)
+  _modalDest.classList.add('open');
   document.getElementById('picker-sel-section').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
 
   // Ocultar sección de tipo hasta que se seleccione al menos un colaborador
