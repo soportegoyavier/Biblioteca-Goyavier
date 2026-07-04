@@ -22,7 +22,13 @@ function _cfg(key) {
 // ============================================================
 function doGet(e) {
   if (e && e.parameter && e.parameter.accion === 'confirmarRecepcion' && e.parameter.sid) {
-    return _paginaConfirmacion(e.parameter.sid);
+    return _paginaConfirmacion(e.parameter.sid, 'bib_solicitudes', 'las copias');
+  }
+  if (e && e.parameter && e.parameter.accion === 'confirmarRecepcionMaterial' && e.parameter.sid) {
+    return _paginaConfirmacion(e.parameter.sid, 'bib_movimientos', 'el material');
+  }
+  if (e && e.parameter && e.parameter.accion === 'confirmarRecepcionLibro' && e.parameter.sid) {
+    return _paginaConfirmacion(e.parameter.sid, 'bib_prestamos_libros', 'el libro');
   }
 
   if (e && e.parameter && e.parameter.payload) {
@@ -56,7 +62,9 @@ function despachar(p) {
   }
 }
 
-function _paginaConfirmacion(sid) {
+function _paginaConfirmacion(sid, tabla, descripcion) {
+  tabla = tabla || 'bib_solicitudes';
+  descripcion = descripcion || 'las copias';
   var url = _cfg("SUPABASE_URL");
   var key = _cfg("SUPABASE_KEY");
   var contenido = '';
@@ -67,7 +75,7 @@ function _paginaConfirmacion(sid) {
   } else {
     try {
       // Verificar si ya fue confirmado antes de actualizar
-      var actual = sbGet(url, key, "bib_solicitudes?id=eq." + encodeURIComponent(sid) + "&select=recepcion_confirmada,recepcion_confirmada_en");
+      var actual = sbGet(url, key, tabla + "?id=eq." + encodeURIComponent(sid) + "&select=recepcion_confirmada,recepcion_confirmada_en");
       if (Array.isArray(actual) && actual.length > 0 && actual[0].recepcion_confirmada === true) {
         var fechaConf = actual[0].recepcion_confirmada_en
           ? new Date(actual[0].recepcion_confirmada_en).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
@@ -76,11 +84,11 @@ function _paginaConfirmacion(sid) {
           '<p style="color:#555;font-size:15px">Esta recepción ya fue confirmada' + (fechaConf ? ' el <strong>' + fechaConf + '</strong>' : '') + '.<br>No es necesario hacer nada más.</p>';
       } else {
         sbPatch(url, key,
-          "bib_solicitudes?id=eq." + encodeURIComponent(sid),
+          tabla + "?id=eq." + encodeURIComponent(sid),
           { recepcion_confirmada: true, recepcion_confirmada_en: new Date().toISOString() }
         );
         contenido = '<h2 style="color:#6f42c1;margin-bottom:12px">✓ ¡Recepción confirmada!</h2>' +
-          '<p style="color:#555;font-size:15px">Gracias por confirmar.<br>La biblioteca ha registrado que recibiste las copias.</p>';
+          '<p style="color:#555;font-size:15px">Gracias por confirmar.<br>La biblioteca ha registrado que recibiste ' + descripcion + '.</p>';
       }
     } catch(ex) {
       Logger.log("_paginaConfirmacion error: " + ex.toString());
@@ -512,6 +520,131 @@ function enviarCorreo(params) {
           "Tienes alguna pregunta? Responde a este correo.";
         break;
 
+      case "movimiento_entregado":
+        var tipoMovLbl = { prestamo: "Prestamo", asignacion: "Asignacion permanente", consumo: "Entrega / Consumo" };
+        var _confirmUrlMat  = ScriptApp.getService().getUrl() + '?accion=confirmarRecepcionMaterial&sid=' + encodeURIComponent(params.movimientoId || '');
+        var _botonConfirmMat = params.movimientoId
+          ? '<div style="text-align:center;margin:24px 0">' +
+            '<a href="' + _confirmUrlMat + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí el material</a>' +
+            '</div>'
+          : '';
+        asunto = "Entrega registrada :) - " + ref;
+        html = wrap("#6f42c1", "Entrega registrada :)",
+          '<p>Hola!</p>' +
+          '<p>Se registro la siguiente entrega de materiales en la Biblioteca.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("Tipo:", tipoMovLbl[params.tipoMovimiento] || params.tipoMovimiento) +
+          fila("Materiales:", params.materiales) +
+          (params.fechaLimite ? fila("Devolver antes de:", params.fechaLimite) : "") +
+          '</table>' +
+          _botonConfirmMat +
+          (params.fechaLimite
+            ? '<p style="background:#fff3e0;border-left:3px solid #f0883e;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+              '<strong>RECUERDA:</strong> este material debe devolverse a la Biblioteca antes de la fecha indicada.</p>'
+            : '') +
+          '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Gracias por usar el servicio de la Biblioteca Goyavier.</p>');
+        plain =
+          "Entrega registrada :)\n\n" +
+          "Se registro la siguiente entrega de materiales en la Biblioteca.\n\n" +
+          "Materiales:\n" + (params.materiales || "") + "\n\n" +
+          (params.fechaLimite ? "Devolver antes de: " + params.fechaLimite + "\n\n" : "") +
+          (params.movimientoId ? "Confirma que recibiste el material en este enlace:\n" + _confirmUrlMat + "\n\n" : "") +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "movimiento_devuelto":
+        asunto = "Devolucion registrada - " + ref;
+        html = wrap("#28a745", "Devolucion registrada",
+          '<p>Hola!</p>' +
+          '<p>Confirmamos que la Biblioteca registro la devolucion del siguiente prestamo.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("Materiales:", params.materiales) +
+          fila("Fecha de devolucion:", params.fechaDevolucion) +
+          fila("Recibido por:", params.usuarioRecibio) +
+          '</table>' +
+          '<p style="background:#eafaf1;border-left:3px solid #28a745;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          '<strong>Este correo sirve como comprobante de paz y salvo</strong> de este prestamo. ' +
+          'Consérvalo por si en algún caso el sistema llegara a mostrarlo como pendiente por devolver — ' +
+          'este correo demuestra que ya fue entregado en la fecha indicada.</p>');
+        plain =
+          "Devolucion registrada\n\n" +
+          "Confirmamos que la Biblioteca registro la devolucion del siguiente prestamo.\n\n" +
+          "Materiales:\n" + (params.materiales || "") + "\n" +
+          "Fecha de devolucion: " + (params.fechaDevolucion || "") + "\n" +
+          "Recibido por: " + (params.usuarioRecibio || "") + "\n\n" +
+          "Este correo sirve como comprobante de paz y salvo de este prestamo. Consérvalo por si en\n" +
+          "algún caso el sistema llegara a mostrarlo como pendiente por devolver.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "libro_prestado":
+        var _fechaLimLbl = params.esInstitucional
+          ? "Sin fecha fija - uso durante el año escolar"
+          : (params.fechaLimite || "-");
+        var _confirmUrlLib  = ScriptApp.getService().getUrl() + '?accion=confirmarRecepcionLibro&sid=' + encodeURIComponent(params.prestamoId || '');
+        var _botonConfirmLib = params.prestamoId
+          ? '<div style="text-align:center;margin:24px 0">' +
+            '<a href="' + _confirmUrlLib + '" style="display:inline-block;background:#2c7be5;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí el libro</a>' +
+            '</div>'
+          : '';
+        asunto = "Prestamo de libro registrado - " + ref;
+        html = wrap("#2c7be5", "Prestamo de libro registrado",
+          '<p>Hola!</p>' +
+          '<p>Se registro el prestamo del siguiente libro en la Biblioteca.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("Libro:", params.libro) +
+          (params.editorial ? fila("Editorial:", params.editorial) : "") +
+          fila("Devolver antes de:", _fechaLimLbl) +
+          '</table>' +
+          _botonConfirmLib +
+          (!params.esInstitucional
+            ? '<p style="background:#fff3e0;border-left:3px solid #f0883e;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+              '<strong>RECUERDA:</strong> este libro debe devolverse a la Biblioteca antes de la fecha indicada.</p>'
+            : '') +
+          '<p style="background:#eaf4ff;border-left:3px solid #2c7be5;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Gracias por usar el servicio de la Biblioteca Goyavier.</p>');
+        plain =
+          "Prestamo de libro registrado\n\n" +
+          "Se registro el prestamo del siguiente libro en la Biblioteca.\n\n" +
+          "Libro: " + (params.libro || "") + "\n" +
+          (params.editorial ? "Editorial: " + params.editorial + "\n" : "") +
+          "Devolver antes de: " + _fechaLimLbl + "\n\n" +
+          (params.prestamoId ? "Confirma que recibiste el libro en este enlace:\n" + _confirmUrlLib + "\n\n" : "") +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "libro_devuelto":
+        asunto = "Devolucion de libro registrada - " + ref;
+        html = wrap("#28a745", "Devolucion registrada",
+          '<p>Hola!</p>' +
+          '<p>Confirmamos que la Biblioteca registro la devolucion del siguiente libro.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("Libro:", params.libro) +
+          fila("Fecha de devolucion:", params.fechaDevolucion) +
+          fila("Recibido por:", params.usuarioRecibio) +
+          '</table>' +
+          '<p style="background:#eafaf1;border-left:3px solid #28a745;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          '<strong>Este correo sirve como comprobante de paz y salvo</strong> de este prestamo de libro. ' +
+          'Consérvalo por si en algún caso el sistema llegara a mostrarlo como pendiente por devolver.</p>');
+        plain =
+          "Devolucion de libro registrada\n\n" +
+          "Confirmamos que la Biblioteca registro la devolucion del siguiente libro.\n\n" +
+          "Libro: " + (params.libro || "") + "\n" +
+          "Fecha de devolucion: " + (params.fechaDevolucion || "") + "\n" +
+          "Recibido por: " + (params.usuarioRecibio || "") + "\n\n" +
+          "Este correo sirve como comprobante de paz y salvo de este prestamo de libro.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
       default:
         return { ok: false, error: "Tipo de correo no reconocido: " + params.tipo };
     }
@@ -701,36 +834,87 @@ function _exportarMes(ano, mes) {
   var fin = Utilities.formatDate(new Date(ano, mes + 1, 1), 'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'");
   Logger.log('Exportando ' + nom + ' ' + ano + ' (' + ini + ' → ' + fin + ')');
 
-  // Consultas Supabase
+  // Consultas Supabase — cada tipo trae lo del mes MAS lo que haya quedado
+  // sin gestionar de meses anteriores (arrastre), para que nada pendiente
+  // desaparezca de los reportes solo porque cambio el mes.
   var qFecha = 'fecha_recepcion=gte.' + ini + '&fecha_recepcion=lt.' + fin;
-  var sols = sbGet(_url, _key,
-    'bib_solicitudes?' + qFecha +
-    '&select=id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,destinatarios,' +
+  var selectSol = 'id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,destinatarios,' +
     'profesor,nombre_recibe,notif_impreso_en,fecha_entrega,' +
-    'bib_documentos(num_hojas,tipo_impresion,forma_impresion)' +
-    '&order=fecha_recepcion.asc');
+    'bib_documentos(num_hojas,tipo_impresion,forma_impresion)';
+  var sols = sbGet(_url, _key, 'bib_solicitudes?' + qFecha + '&select=' + selectSol + '&order=fecha_recepcion.asc');
+  var solsPend = sbGet(_url, _key,
+    'bib_solicitudes?fecha_recepcion=lt.' + ini + '&estado=not.in.(entregado,cancelado)' +
+    '&select=' + selectSol + '&order=fecha_recepcion.asc');
+
   var trabs = sbGet(_url, _key,
     'bib_trabajos_impresion?created_at=gte.' + ini + '&created_at=lt.' + fin +
     '&select=solicitud_id,nombre,profesor,total_hojas,archivos');
-  var ventas = sbGet(_url, _key,
-    'bib_solicitudes?' + qFecha +
-    '&tipo_remitente=eq.personal' +
-    '&select=id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,' +
-    'bib_trabajos_personal(precio_total,valor_pagado)' +
-    '&order=fecha_recepcion.asc');
 
-  if (!Array.isArray(sols))   throw new Error('Error solicitudes: ' + JSON.stringify(sols));
-  if (!Array.isArray(trabs))  trabs  = [];
-  if (!Array.isArray(ventas)) ventas = [];
-  Logger.log('Datos: ' + sols.length + ' sols, ' + trabs.length + ' trabs, ' + ventas.length + ' ventas');
+  var selectVentas = 'id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,' +
+    'bib_trabajos_personal(precio_total,valor_pagado)';
+  var ventas = sbGet(_url, _key,
+    'bib_solicitudes?' + qFecha + '&tipo_remitente=eq.personal&select=' + selectVentas + '&order=fecha_recepcion.asc');
+  var ventasPend = sbGet(_url, _key,
+    'bib_solicitudes?fecha_recepcion=lt.' + ini + '&tipo_remitente=eq.personal&estado=not.in.(entregado,cancelado)' +
+    '&select=' + selectVentas + '&order=fecha_recepcion.asc');
+
+  var qFechaMov = 'created_at=gte.' + ini + '&created_at=lt.' + fin;
+  var selectMov = 'id,id_movimiento,tipo,colaborador_nombre,area,fecha_limite_devolucion,fecha_devolucion_real';
+  var movs = sbGet(_url, _key, 'bib_movimientos?' + qFechaMov + '&select=' + selectMov + '&order=created_at.asc');
+  var movsPend = sbGet(_url, _key,
+    'bib_movimientos?created_at=lt.' + ini + '&tipo=neq.consumo&fecha_devolucion_real=is.null' +
+    '&select=' + selectMov + '&order=created_at.asc');
+  if (!Array.isArray(movsPend)) movsPend = [];
+
+  var lineasMov = sbGet(_url, _key,
+    'bib_movimiento_materiales?select=movimiento_id,nombre,cantidad_entregada,unidad_medida,cantidad_devuelta,bib_movimientos!inner(created_at)' +
+    '&bib_movimientos.created_at=gte.' + ini + '&bib_movimientos.created_at=lt.' + fin);
+  var lineasMovPend = [];
+  if (movsPend.length) {
+    var idsPend = movsPend.map(function(m){ return m.id; }).join(',');
+    lineasMovPend = sbGet(_url, _key,
+      'bib_movimiento_materiales?movimiento_id=in.(' + idsPend + ')' +
+      '&select=movimiento_id,nombre,cantidad_entregada,unidad_medida,cantidad_devuelta');
+  }
+
+  var selectLib = 'id,id_prestamo,libro_titulo,tipo_prestatario,prestatario_nombre,es_institucional,fecha_limite_devolucion,fecha_devolucion_real';
+  var libros = sbGet(_url, _key,
+    'bib_prestamos_libros?fecha_prestamo=gte.' + ini + '&fecha_prestamo=lt.' + fin + '&select=' + selectLib + '&order=fecha_prestamo.asc');
+  var librosPend = sbGet(_url, _key,
+    'bib_prestamos_libros?fecha_prestamo=lt.' + ini + '&fecha_devolucion_real=is.null' +
+    '&select=' + selectLib + '&order=fecha_prestamo.asc');
+
+  if (!Array.isArray(sols))         throw new Error('Error solicitudes: ' + JSON.stringify(sols));
+  if (!Array.isArray(trabs))        trabs         = [];
+  if (!Array.isArray(ventas))       ventas        = [];
+  if (!Array.isArray(movs))         movs          = [];
+  if (!Array.isArray(lineasMov))    lineasMov     = [];
+  if (!Array.isArray(libros))       libros        = [];
+  if (!Array.isArray(solsPend))     solsPend      = [];
+  if (!Array.isArray(ventasPend))   ventasPend    = [];
+  if (!Array.isArray(lineasMovPend)) lineasMovPend = [];
+  if (!Array.isArray(librosPend))   librosPend    = [];
+
+  sols      = solsPend.concat(sols);
+  ventas    = ventasPend.concat(ventas);
+  movs      = movsPend.concat(movs);
+  lineasMov = lineasMovPend.concat(lineasMov);
+  libros    = librosPend.concat(libros);
+
+  Logger.log('Datos: ' + sols.length + ' sols (+' + solsPend.length + ' arrastradas), ' + trabs.length + ' trabs, ' +
+    ventas.length + ' ventas (+' + ventasPend.length + ' arrastradas), ' +
+    movs.length + ' movs (+' + movsPend.length + ' arrastrados), ' +
+    libros.length + ' libros (+' + librosPend.length + ' arrastrados)');
 
   // Crear Google Spreadsheet
   var nombre = 'Biblioteca_' + nom + '_' + ano;
   var ss = SpreadsheetApp.create(nombre);
-  _crearHojaResumen(ss, sols, trabs, ventas, nom, ano);
+  _crearHojaResumen(ss, sols, trabs, ventas, movs, libros, nom, ano);
   _crearHojaSolicitudes(ss, sols, nom, ano);
   _crearHojaTrabajosImp(ss, sols, trabs, nom, ano);
   _crearHojaVentas(ss, ventas, nom, ano);
+  _crearHojaMovimientos(ss, movs, lineasMov, nom, ano);
+  _crearHojaLibros(ss, libros, nom, ano);
   // Borrar hoja por defecto vacía
   ['Sheet1','Hoja 1','Hoja1'].forEach(function(n) {
     var def = ss.getSheetByName(n);
@@ -759,7 +943,7 @@ function _exportarMes(ano, mes) {
   // Enviar email
   var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
   var emails    = emailDest.split(',').map(function(e){return e.trim();}).filter(Boolean);
-  var htmlBody  = _htmlEmailReporte(nom, ano, sols, ventas, 'https://drive.google.com/drive/folders/' + carpeta.getId());
+  var htmlBody  = _htmlEmailReporte(nom, ano, sols, ventas, movs, libros, 'https://drive.google.com/drive/folders/' + carpeta.getId());
   emails.forEach(function(email) {
     GmailApp.sendEmail(email,
       'Reporte Biblioteca ' + nom + ' ' + ano + ' — guardado automaticamente',
@@ -772,7 +956,7 @@ function _exportarMes(ano, mes) {
 }
 
 // ── Hoja RESUMEN (KPIs generales + ventas) ────────────────────
-function _crearHojaResumen(ss, sols, trabs, ventas, nom, ano) {
+function _crearHojaResumen(ss, sols, trabs, ventas, movs, libros, nom, ano) {
   var sh = ss.insertSheet('Resumen');
   sh.setColumnWidth(1,220); sh.setColumnWidth(2,110); sh.setColumnWidth(3,110);
   sh.setColumnWidth(4,110); sh.setColumnWidth(5,110);
@@ -865,6 +1049,35 @@ function _crearHojaResumen(ss, sols, trabs, ventas, nom, ano) {
       sh.setRowHeight(r++, 18);
     });
   }
+  sh.setRowHeight(r++, 8);
+
+  // Movimientos de materiales
+  var cntMov = {prestamo:0, asignacion:0, consumo:0};
+  var devMov=0, actMov=0, venMov=0;
+  var hoyD = new Date(); hoyD.setHours(0,0,0,0);
+  movs.forEach(function(m) {
+    cntMov[m.tipo] = (cntMov[m.tipo]||0) + 1;
+    if (m.tipo !== 'consumo') {
+      if (m.fecha_devolucion_real) devMov++;
+      else if (m.fecha_limite_devolucion && new Date(m.fecha_limite_devolucion+'T00:00:00') < hoyD) venMov++;
+      else actMov++;
+    }
+  });
+  fHdr(r++, 'MOVIMIENTOS DE MATERIALES', '#334155', '#FFFFFF');
+  fKpiLbl(r++, ['Prestamos','Asignaciones','Consumos','Total']);
+  fKpiVal(r++, [cntMov.prestamo||0, cntMov.asignacion||0, cntMov.consumo||0, movs.length],
+    ['#DBEAFE','#DBEAFE','#F1F5F9','#EDE9FE']);
+  fKpiLbl(r++, ['Devueltos','Activos','Vencidos','']);
+  fKpiVal(r++, [devMov, actMov, venMov, ''], ['#DCFCE7','#DBEAFE','#FEE2E2','#FFFFFF']);
+  sh.setRowHeight(r++, 8);
+
+  // Prestamos de libros
+  var cntLib = {estudiante:0, colaborador:0, institucional:0};
+  libros.forEach(function(l) { cntLib[l.tipo_prestatario] = (cntLib[l.tipo_prestatario]||0) + 1; });
+  fHdr(r++, 'PRESTAMOS DE LIBROS', '#334155', '#FFFFFF');
+  fKpiLbl(r++, ['Estudiantes','Colaboradores','Institucionales','Total']);
+  fKpiVal(r++, [cntLib.estudiante||0, cntLib.colaborador||0, cntLib.institucional||0, libros.length],
+    ['#DBEAFE','#DBEAFE','#EDE9FE','#F1F5F9']);
 }
 
 // ── Hoja SOLICITUDES ──────────────────────────────────────────
@@ -1018,6 +1231,98 @@ function _crearHojaVentas(ss, ventas, nom, ano) {
   }
 }
 
+// ── Hoja MOVIMIENTOS (materiales) ─────────────────────────────
+function _crearHojaMovimientos(ss, movs, lineasMov, nom, ano) {
+  var sh = ss.insertSheet('Movimientos');
+  [30,100,90,180,140,90,100,120,320].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
+  var tipoLbl = {prestamo:'Prestamo', asignacion:'Asignacion', consumo:'Consumo'};
+  var tz = Session.getScriptTimeZone();
+  var hoyD = new Date(); hoyD.setHours(0,0,0,0);
+  var BGEST = {Devuelto:'#DCFCE7', Activo:'#DBEAFE', Vencido:'#FEE2E2'};
+
+  var matPorMov = {};
+  lineasMov.forEach(function(l) {
+    if (!matPorMov[l.movimiento_id]) matPorMov[l.movimiento_id] = [];
+    matPorMov[l.movimiento_id].push(l.cantidad_entregada + (l.cantidad_devuelta ? ' (dev. ' + l.cantidad_devuelta + ')' : '') + ' ' + l.unidad_medida + ' de ' + l.nombre);
+  });
+
+  sh.getRange(1,1,1,9).merge().setValue('MOVIMIENTOS DE MATERIALES — ' + nom + ' ' + ano)
+    .setBackground('#1e3a5f').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(13).setVerticalAlignment('middle');
+  sh.setRowHeight(1,28);
+  sh.getRange(2,1,1,9).setValues([['N','ID','Tipo','Colaborador','Area','Estado','Fecha limite','Devuelto','Materiales']])
+    .setBackground('#475569').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
+  sh.setRowHeight(2,20); sh.setFrozenRows(2);
+
+  var rows = [], bgs = [];
+  movs.forEach(function(m, i) {
+    var esDev = m.tipo !== 'consumo';
+    var estado = '—';
+    if (esDev) {
+      if (m.fecha_devolucion_real) estado = 'Devuelto';
+      else if (m.fecha_limite_devolucion && new Date(m.fecha_limite_devolucion+'T00:00:00') < hoyD) estado = 'Vencido';
+      else estado = 'Activo';
+    }
+    var fDev = m.fecha_devolucion_real ? Utilities.formatDate(new Date(m.fecha_devolucion_real), tz, 'dd/MM/yyyy') : '';
+    rows.push([i+1, m.id_movimiento||'', tipoLbl[m.tipo]||m.tipo, m.colaborador_nombre||'', m.area||'',
+      estado, m.fecha_limite_devolucion||'', fDev, (matPorMov[m.id]||[]).join(' | ')]);
+    bgs.push(esDev ? (BGEST[estado]||'#FFFFFF') : (i%2===0?'#FFFFFF':'#F8FAFC'));
+  });
+  if (rows.length) {
+    sh.getRange(3,1,rows.length,9).setValues(rows);
+    rows.forEach(function(_, i) {
+      sh.getRange(i+3,1,1,9).setBackground(bgs[i]);
+      sh.setRowHeight(i+3, 18);
+    });
+    sh.getRange(3,9,rows.length,1).setWrap(true);
+    var tr = rows.length+3;
+    sh.getRange(tr,1,1,9).setValues([['TOTAL','','','','','','','',movs.length+' movimientos']]);
+    sh.getRange(tr,1,1,9).setBackground('#E2E8F0').setFontWeight('bold').setFontColor('#0f172a');
+    sh.setRowHeight(tr,22);
+  }
+}
+
+// ── Hoja PRESTAMOS DE LIBROS ───────────────────────────────────
+function _crearHojaLibros(ss, libros, nom, ano) {
+  var sh = ss.insertSheet('Prestamos Libros');
+  [30,100,220,180,110,90,100,120].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
+  var tipoLbl = {estudiante:'Estudiante', colaborador:'Colaborador', institucional:'Institucional'};
+  var tz = Session.getScriptTimeZone();
+  var hoyD = new Date(); hoyD.setHours(0,0,0,0);
+  var BGEST = {Devuelto:'#DCFCE7', Activo:'#DBEAFE', Vencido:'#FEE2E2'};
+
+  sh.getRange(1,1,1,8).merge().setValue('PRESTAMOS DE LIBROS — ' + nom + ' ' + ano)
+    .setBackground('#1e3a5f').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(13).setVerticalAlignment('middle');
+  sh.setRowHeight(1,28);
+  sh.getRange(2,1,1,8).setValues([['N','ID','Libro','Prestatario','Tipo','Institucional','Fecha limite','Devuelto']])
+    .setBackground('#475569').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
+  sh.setRowHeight(2,20); sh.setFrozenRows(2);
+
+  var rows = [], bgs = [];
+  libros.forEach(function(l, i) {
+    var estado = '—';
+    if (!l.es_institucional) {
+      if (l.fecha_devolucion_real) estado = 'Devuelto';
+      else if (l.fecha_limite_devolucion && new Date(l.fecha_limite_devolucion+'T00:00:00') < hoyD) estado = 'Vencido';
+      else estado = 'Activo';
+    }
+    var fDev = l.fecha_devolucion_real ? Utilities.formatDate(new Date(l.fecha_devolucion_real), tz, 'dd/MM/yyyy') : '';
+    rows.push([i+1, l.id_prestamo||'', l.libro_titulo||'', l.prestatario_nombre||'', tipoLbl[l.tipo_prestatario]||l.tipo_prestatario,
+      l.es_institucional?'Si':'No', l.fecha_limite_devolucion||'', fDev]);
+    bgs.push(!l.es_institucional ? (BGEST[estado]||'#FFFFFF') : (i%2===0?'#FFFFFF':'#F8FAFC'));
+  });
+  if (rows.length) {
+    sh.getRange(3,1,rows.length,8).setValues(rows);
+    rows.forEach(function(_, i) {
+      sh.getRange(i+3,1,1,8).setBackground(bgs[i]);
+      sh.setRowHeight(i+3, 18);
+    });
+    var tr = rows.length+3;
+    sh.getRange(tr,1,1,8).setValues([['TOTAL','','','','','','',libros.length+' prestamos']]);
+    sh.getRange(tr,1,1,8).setBackground('#E2E8F0').setFontWeight('bold').setFontColor('#0f172a');
+    sh.setRowHeight(tr,22);
+  }
+}
+
 // ── Carpeta en Drive para guardar reportes ────────────────────
 function _carpetaReportes() {
   var nombre = 'Biblioteca Goyavier - Reportes';
@@ -1049,7 +1354,7 @@ function _alertaFinDeMes(dias, fecha) {
 }
 
 // ── Email con el reporte adjunto ─────────────────────────────
-function _htmlEmailReporte(nom, ano, sols, ventas, driveUrl) {
+function _htmlEmailReporte(nom, ano, sols, ventas, movs, libros, driveUrl) {
   var total    = sols.length;
   var entregadas = sols.filter(function(s){return s.estado==='entregado';}).length;
   var hTot     = sols.reduce(function(a,s){return a+(s.bib_documentos||[]).reduce(function(b,d){return b+(d.num_hojas||0);},0);},0);
@@ -1065,6 +1370,8 @@ function _htmlEmailReporte(nom, ano, sols, ventas, driveUrl) {
     + '<tr><td style="padding:8px;color:#64748b">Solicitudes entregadas</td><td style="font-weight:bold;color:#166534">' + entregadas + '</td></tr>'
     + '<tr style="background:#f1f5f9"><td style="padding:8px;color:#64748b">Total hojas impresas</td><td style="font-weight:bold">' + hTot + '</td></tr>'
     + '<tr><td style="padding:8px;color:#64748b">Ventas del mes</td><td style="font-weight:bold;color:#1e3a5f">' + pesos(totCob) + '</td></tr>'
+    + '<tr style="background:#f1f5f9"><td style="padding:8px;color:#64748b">Movimientos de materiales</td><td style="font-weight:bold">' + movs.length + '</td></tr>'
+    + '<tr><td style="padding:8px;color:#64748b">Prestamos de libros</td><td style="font-weight:bold">' + libros.length + '</td></tr>'
     + '</table>'
     + '<div style="margin-top:14px;padding:12px;background:#dbeafe;border-radius:6px;font-size:13px">'
     + 'Archivo Excel adjunto. Tambien guardado en '

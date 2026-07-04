@@ -417,18 +417,25 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
 
 /* MOBILE */
 .mnav{display:none;position:fixed;bottom:0;left:0;right:0;height:58px;background:var(--s1);border-top:1px solid var(--border);z-index:100;padding:0 8px}
-.mnav-items{display:flex;height:100%;align-items:stretch}
-.mni{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;color:var(--muted);font-size:9.5px;font-weight:600;letter-spacing:.04em;border-radius:8px;margin:6px 2px;transition:all .15s;position:relative;-webkit-tap-highlight-color:transparent;user-select:none}
+.mnav-items{display:flex;height:100%;align-items:stretch;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.mnav-items::-webkit-scrollbar{display:none}
+.mni{flex:1 1 62px;min-width:62px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;color:var(--muted);font-size:9.5px;font-weight:600;letter-spacing:.04em;border-radius:8px;margin:6px 2px;transition:all .15s;position:relative;-webkit-tap-highlight-color:transparent;user-select:none}
 .mni .mni-ic{font-size:21px;line-height:1}
 .mni.active{color:var(--accent);background:var(--accent-bg)}
 .mni .mnb{position:absolute;top:3px;right:8px;background:var(--accent);color:#fff;font-size:9px;font-weight:700;min-width:15px;height:15px;padding:0 3px;border-radius:20px;display:flex;align-items:center;justify-content:center}
 .mob-topbar{display:none;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 
 @media (max-width:768px){
-  .sb{display:none!important}
-  .mnav{display:flex}
+  .sb{
+    display:flex!important;position:fixed;top:0;left:0;bottom:0;z-index:2000;
+    transform:translateX(-100%);transition:transform .25s ease;box-shadow:8px 0 24px rgba(0,0,0,.4);
+  }
+  .sb.open{transform:translateX(0)}
+  .sb-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1999}
+  .sb-backdrop.open{display:block}
+  .mob-hamburger{display:inline-flex!important}
   html,body{overflow:auto;height:auto}
-  .shell{height:auto;overflow:visible;flex-direction:column;padding-bottom:62px}
+  .shell{height:auto;overflow:visible;flex-direction:column}
   .main{overflow:visible;min-height:100vh}
   .content{overflow:visible;padding:12px 12px 20px}
   .topbar{padding:0 12px;gap:8px}
@@ -448,13 +455,24 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
   .mo{align-items:flex-end;padding:0}
   .fg{grid-template-columns:1fr}
   .fg.c3{grid-template-columns:1fr 1fr}
-  #tc{bottom:66px;right:10px;left:10px}
+  #tc{bottom:16px;right:10px;left:10px}
   .toast{max-width:100%}
+
+  /* Materiales, Dashboard (alertas/deudores): aun no tienen vista de
+     tarjetas para movil, asi que en vez de ocultarse como el resto de
+     tablas .tw, se dejan visibles con scroll horizontal. */
+  #mat-content .tw, #dash-alertas-prestamos .tw, #dash-deudores .tw {
+    display:block!important; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  }
+  #mat-content .tw table, #dash-alertas-prestamos .tw table, #dash-deudores .tw table {
+    min-width:520px;
+  }
 }
 @media (min-width:769px){
   .card-list{display:none!important}
-  .mnav{display:none!important}
   .mob-topbar{display:none!important}
+  .mob-hamburger{display:none!important}
+  .sb-backdrop{display:none!important}
 }
 
 /* ── DANGER BUTTON VARIANTS ─────────────────────── */

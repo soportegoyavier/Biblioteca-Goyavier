@@ -677,7 +677,11 @@ async function verDetalle(id) {
       ${trabajosHTML}
       <hr class="msep">
       <div class="msec-hdr" style="margin-bottom:10px">Documentos adjuntos</div>
-      ${adjHTML}`;
+      ${adjHTML}
+      <hr class="msep">
+      ${!data.convertido_a_movimiento
+        ? `<button class="btn btn-ghost" onclick="enviarASolicitudMateriales(${data.id})"><i class="fa fa-box-archive fa-sm"></i> Enviar a Materiales</button>`
+        : `<p style="font-size:12px;color:var(--muted)"><i class="fa fa-box-archive fa-sm"></i> Ya enviado a Materiales</p>`}`;
   } catch(e) {
     document.getElementById('md-body').innerHTML = `<p style="color:var(--red);padding:12px">Error: ${e.message}</p>`;
   }

@@ -19,8 +19,12 @@ function badge(estado) {
     pendiente:['b-pendiente','Pendiente'],
     recibido: ['b-recibido', 'Recibido'],
     impreso:  ['b-impreso',  'Impreso'],
+    preparado:['b-impreso',  'Preparado'],
     entregado:['b-entregado','Entregado'],
     cancelado:['b-cancelado','Cancelado'],
+    activo:   ['b-recibido', 'Activo'],
+    devuelto: ['b-entregado','Devuelto'],
+    vencido:  ['b-cancelado','Vencido'],
   };
   const [cls,txt] = m[estado]||['b-pendiente','—'];
   return `<span class="badge ${cls}">${txt}</span>`;

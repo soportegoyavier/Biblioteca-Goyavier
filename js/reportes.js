@@ -116,6 +116,124 @@ async function cargarReportes() {
   } catch(e) {
     document.getElementById('rep-content').innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p>Error: ${e.message}</p></div>`;
   }
+  cargarStatsMateriales(); // independiente, no bloquea el resto de Reportes
+}
+
+// ── ESTADÍSTICAS DE MATERIALES Y PRÉSTAMOS ─────────────────────
+async function cargarStatsMateriales() {
+  const el = document.getElementById('rep-materiales');
+  if (!el) return;
+  el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
+  try {
+    const ano = _ano !== undefined ? _ano : _hoy.getFullYear();
+    const mes = _mes !== undefined ? _mes : _hoy.getMonth();
+    const ini = new Date(ano, mes, 1).toISOString();
+    const fin = new Date(ano, mes + 1, 1).toISOString();
+
+    const [movMes, lineasMes, libMes, libTodos] = await Promise.all([
+      _sb.from('bib_movimientos').select('tipo,fecha_devolucion_real,fecha_limite_devolucion,colaborador_nombre').gte('created_at', ini).lt('created_at', fin),
+      _sb.from('bib_movimiento_materiales').select('nombre,cantidad_entregada,bib_movimientos!inner(created_at)').gte('bib_movimientos.created_at', ini).lt('bib_movimientos.created_at', fin),
+      _sb.from('bib_prestamos_libros').select('libro_titulo,tipo_prestatario').gte('fecha_prestamo', ini).lt('fecha_prestamo', fin),
+      _sb.from('bib_prestamos_libros').select('es_institucional,fecha_devolucion_real'),
+    ]);
+    if (movMes.error)    throw movMes.error;
+    if (lineasMes.error) throw lineasMes.error;
+    if (libMes.error)    throw libMes.error;
+
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    function estadoPrestamo(r) {
+      if (r.fecha_devolucion_real) return 'devuelto';
+      if (r.fecha_limite_devolucion) {
+        const lim = new Date(r.fecha_limite_devolucion + 'T00:00:00');
+        if (lim < hoy) return 'vencido';
+      }
+      return 'activo';
+    }
+
+    const cntTipo = { prestamo:0, asignacion:0, consumo:0 };
+    let devueltos = 0, pendientes = 0, vencidos = 0;
+    (movMes.data||[]).forEach(m => {
+      cntTipo[m.tipo] = (cntTipo[m.tipo]||0) + 1;
+      if (m.tipo === 'prestamo' || m.tipo === 'asignacion') {
+        const e = estadoPrestamo(m);
+        if (e === 'devuelto') devueltos++; else if (e === 'vencido') vencidos++; else pendientes++;
+      }
+    });
+
+    const matUso = {};
+    (lineasMes.data||[]).forEach(l => { matUso[l.nombre] = (matUso[l.nombre]||0) + (l.cantidad_entregada||0); });
+    const matTop = Object.entries(matUso).sort((a,b) => b[1]-a[1]).slice(0, 8);
+    const maxMat = matTop[0]?.[1] || 1;
+
+    const colabCnt = {};
+    (movMes.data||[]).forEach(m => { const k = m.colaborador_nombre || 'Desconocido'; colabCnt[k] = (colabCnt[k]||0) + 1; });
+    const colabTop = Object.entries(colabCnt).sort((a,b) => b[1]-a[1]).slice(0, 8);
+    const maxColab = colabTop[0]?.[1] || 1;
+
+    const libTipoCnt = { estudiante:0, colaborador:0, institucional:0 };
+    (libMes.data||[]).forEach(l => { libTipoCnt[l.tipo_prestatario] = (libTipoCnt[l.tipo_prestatario]||0) + 1; });
+    const libTop = {};
+    (libMes.data||[]).forEach(l => { libTop[l.libro_titulo] = (libTop[l.libro_titulo]||0) + 1; });
+    const libTopArr = Object.entries(libTop).sort((a,b) => b[1]-a[1]).slice(0, 8);
+    const maxLibTop = libTopArr[0]?.[1] || 1;
+    const libInstActivos = (libTodos.data||[]).filter(l => l.es_institucional && !l.fecha_devolucion_real).length;
+
+    el.innerHTML = `
+      <div class="rep-grid">
+        <div class="rep-card">
+          <div class="rep-card-title">Movimientos este mes</div>
+          <div class="rep-stat"><span>Préstamos</span><span class="rep-stat-val" style="color:var(--accent)">${cntTipo.prestamo}</span></div>
+          <div class="rep-stat"><span>Asignaciones</span><span class="rep-stat-val">${cntTipo.asignacion}</span></div>
+          <div class="rep-stat"><span>Consumos</span><span class="rep-stat-val">${cntTipo.consumo}</span></div>
+        </div>
+        <div class="rep-card">
+          <div class="rep-card-title">Préstamos / asignaciones (mes)</div>
+          <div class="rep-stat"><span>Devueltos</span><span class="rep-stat-val" style="color:var(--green)">${devueltos}</span></div>
+          <div class="rep-stat"><span>Pendientes</span><span class="rep-stat-val">${pendientes}</span></div>
+          <div class="rep-stat"><span>Vencidos</span><span class="rep-stat-val" style="color:var(--red)">${vencidos}</span></div>
+        </div>
+        <div class="rep-card">
+          <div class="rep-card-title">Libros este mes</div>
+          <div class="rep-stat"><span>Estudiantes</span><span class="rep-stat-val">${libTipoCnt.estudiante||0}</span></div>
+          <div class="rep-stat"><span>Colaboradores</span><span class="rep-stat-val">${libTipoCnt.colaborador||0}</span></div>
+          <div class="rep-stat"><span>Institucionales</span><span class="rep-stat-val">${libTipoCnt.institucional||0}</span></div>
+          <div class="rep-stat"><span>Institucionales activos (total)</span><span class="rep-stat-val" style="color:var(--accent)">${libInstActivos}</span></div>
+        </div>
+        ${matTop.length ? `
+        <div class="rep-card" style="grid-column:span 2">
+          <div class="rep-card-title">Materiales más usados · este mes</div>
+          ${matTop.map(([n,c]) => `
+            <div class="rep-bar-row">
+              <span class="rep-bar-lbl" title="${escHtml(n)}">${escHtml(n)}</span>
+              <div class="rep-bar-bg"><div class="rep-bar-fill" style="width:${(c/maxMat*100).toFixed(0)}%;background:var(--accent)"></div></div>
+              <span class="rep-bar-cnt">${c}</span>
+            </div>`).join('')}
+        </div>` : ''}
+        ${libTopArr.length ? `
+        <div class="rep-card" style="grid-column:span 2">
+          <div class="rep-card-title">Libros más prestados · este mes</div>
+          ${libTopArr.map(([n,c]) => `
+            <div class="rep-bar-row">
+              <span class="rep-bar-lbl" title="${escHtml(n)}">${escHtml(n)}</span>
+              <div class="rep-bar-bg"><div class="rep-bar-fill" style="width:${(c/maxLibTop*100).toFixed(0)}%;background:var(--accent)"></div></div>
+              <span class="rep-bar-cnt">${c}</span>
+            </div>`).join('')}
+        </div>` : ''}
+        ${colabTop.length ? `
+        <div class="rep-card" style="grid-column:span 2">
+          <div class="rep-card-title">Colaboradores con más movimientos · este mes</div>
+          ${colabTop.map(([n,c]) => `
+            <div class="rep-bar-row">
+              <span class="rep-bar-lbl" title="${escHtml(n)}">${escHtml(n)}</span>
+              <div class="rep-bar-bg"><div class="rep-bar-fill" style="width:${(c/maxColab*100).toFixed(0)}%;background:var(--accent)"></div></div>
+              <span class="rep-bar-cnt">${c}</span>
+            </div>`).join('')}
+        </div>` : ''}
+        ${!matTop.length && !libTopArr.length && !colabTop.length ? '<div class="rep-card" style="grid-column:span 2"><p style="color:var(--dim);font-size:12px">Sin datos aún este mes</p></div>' : ''}
+      </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p>Error: ${e.message}</p></div>`;
+  }
 }
 
 // ── EXCEL — utilidades SpreadsheetML ─────────────────────────
@@ -465,5 +583,126 @@ async function exportarExcelVentas() {
 
     _xDl(`Biblioteca_Ventas_${nom}_${ano}.xls`, [s1, s2]);
     toast('Excel ventas descargado.', 'success');
+  } catch(e) { toast('Error al generar Excel: ' + e.message, 'error'); }
+}
+
+// ── EXCEL MATERIALES Y PRÉSTAMOS ──────────────────────────────
+async function exportarExcelMateriales() {
+  const ano = _ano !== undefined ? _ano : _hoy.getFullYear();
+  const mes = _mes !== undefined ? _mes : _hoy.getMonth();
+  const ini = new Date(ano, mes, 1).toISOString();
+  const fin = new Date(ano, mes + 1, 1).toISOString();
+  const nom = _XM[mes];
+  toast('Generando Excel de materiales...', 'info');
+  try {
+    const [{ data: movs, error: e1 }, { data: lineas, error: e2 }, { data: libros, error: e3 }] = await Promise.all([
+      _sb.from('bib_movimientos')
+        .select('id,id_movimiento,tipo,colaborador_nombre,area,fecha_limite_devolucion,fecha_devolucion_real,created_at')
+        .gte('created_at', ini).lt('created_at', fin).order('created_at', { ascending: true }),
+      _sb.from('bib_movimiento_materiales')
+        .select('movimiento_id,nombre,cantidad_entregada,unidad_medida,cantidad_devuelta,bib_movimientos!inner(created_at)')
+        .gte('bib_movimientos.created_at', ini).lt('bib_movimientos.created_at', fin),
+      _sb.from('bib_prestamos_libros')
+        .select('id_prestamo,libro_titulo,tipo_prestatario,prestatario_nombre,es_institucional,fecha_limite_devolucion,fecha_devolucion_real,fecha_prestamo')
+        .gte('fecha_prestamo', ini).lt('fecha_prestamo', fin).order('fecha_prestamo', { ascending: true }),
+    ]);
+    if (e1) throw e1;
+    if (e2) throw e2;
+    if (e3) throw e3;
+    const MM = movs || [];
+    const LL = lineas || [];
+    const LIB = libros || [];
+
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    function estadoPrestamo(fechaDev, fechaLim) {
+      if (fechaDev) return 'Devuelto';
+      if (fechaLim) { const l = new Date(fechaLim + 'T00:00:00'); if (l < hoy) return 'Vencido'; }
+      return 'Activo';
+    }
+    const sidEstado = { Devuelto:'entr', Activo:'reci', Vencido:'canc' };
+
+    const matPorMov = new Map();
+    LL.forEach(l => {
+      if (!matPorMov.has(l.movimiento_id)) matPorMov.set(l.movimiento_id, []);
+      matPorMov.get(l.movimiento_id).push(`${l.cantidad_entregada}${l.cantidad_devuelta ? ' (dev. ' + l.cantidad_devuelta + ')' : ''} ${l.unidad_medida} de ${l.nombre}`);
+    });
+
+    const cntTipo = { prestamo:0, asignacion:0, consumo:0 };
+    let devueltos=0, activos=0, vencidos=0;
+    MM.forEach(m => {
+      cntTipo[m.tipo] = (cntTipo[m.tipo]||0) + 1;
+      if (m.tipo !== 'consumo') {
+        const e = estadoPrestamo(m.fecha_devolucion_real, m.fecha_limite_devolucion);
+        if (e === 'Devuelto') devueltos++; else if (e === 'Vencido') vencidos++; else activos++;
+      }
+    });
+    const libCnt = { estudiante:0, colaborador:0, institucional:0 };
+    LIB.forEach(l => { libCnt[l.tipo_prestatario] = (libCnt[l.tipo_prestatario]||0) + 1; });
+
+    // ── HOJA 1: RESUMEN (4 columnas) ─────────────────────────
+    const N1 = 4;
+    const r1 = [];
+    r1.push(_xHdr(`BIBLIOTECA GOYAVIER — Reporte de Materiales y Préstamos · ${nom} ${ano}`, 'tit', N1));
+    r1.push(_xHdr(`Generado: ${_xFecha(new Date().toISOString())}`, 'per', N1));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('MOVIMIENTOS DEL MES', 'sh', N1));
+    r1.push(_xRow([_xC('Préstamos','String','kn'),_xC('Asignaciones','String','kn'),_xC('Consumos','String','kn'),_xC('Total','String','kn')], 18));
+    r1.push(_xRow([_xC(cntTipo.prestamo,'Number','kv'),_xC(cntTipo.asignacion,'Number','kv'),_xC(cntTipo.consumo,'Number','kv'),_xC(MM.length,'Number','kvo')], 30));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('ESTADO DE PRESTAMOS Y ASIGNACIONES', 'sh', N1));
+    r1.push(_xRow([_xC('Devueltos','String','kn'),_xC('Activos','String','kn'),_xC('Vencidos','String','kn'),_xC('','String','kn')], 18));
+    r1.push(_xRow([_xC(devueltos,'Number','kvo'),_xC(activos,'Number','kv'),_xC(vencidos,'Number','kvr'),_xC('','String','def')], 30));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('PRESTAMOS DE LIBROS DEL MES', 'sh', N1));
+    r1.push(_xRow([_xC('Estudiantes','String','kn'),_xC('Colaboradores','String','kn'),_xC('Institucionales','String','kn'),_xC('Total','String','kn')], 18));
+    r1.push(_xRow([_xC(libCnt.estudiante||0,'Number','kv'),_xC(libCnt.colaborador||0,'Number','kv'),_xC(libCnt.institucional||0,'Number','kv'),_xC(LIB.length,'Number','kvo')], 30));
+    const s1 = _xSheet(`${nom} ${ano} - Resumen Materiales`, [160,160,160,160], r1);
+
+    // ── HOJA 2: MOVIMIENTOS (9 columnas) ─────────────────────
+    const H2 = ['N','ID','Tipo','Colaborador','Área','Estado','Fecha límite','Devuelto','Materiales'];
+    const N2 = H2.length;
+    const r2 = [];
+    r2.push(_xHdr(`MOVIMIENTOS — ${nom} ${ano}`, 'tit', N2));
+    r2.push(_xRow(H2.map(h => _xC(h,'String','ch')), 20));
+    const tipoLbl2 = { prestamo:'Préstamo', asignacion:'Asignación', consumo:'Consumo' };
+    MM.forEach((m,i) => {
+      const esDevolvible = m.tipo !== 'consumo';
+      const estado = esDevolvible ? estadoPrestamo(m.fecha_devolucion_real, m.fecha_limite_devolucion) : '—';
+      const sid = esDevolvible ? (sidEstado[estado]||'def') : (i%2===0?'def':'alt');
+      r2.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(m.id_movimiento||'','String',sid), _xC(tipoLbl2[m.tipo]||m.tipo,'String',sid),
+        _xC(m.colaborador_nombre||'','String',sid), _xC(m.area||'','String',sid), _xC(estado,'String',sid),
+        _xC(m.fecha_limite_devolucion||'','String',sid),
+        _xC(m.fecha_devolucion_real ? _xFecha(m.fecha_devolucion_real) : '','String',sid),
+        _xC((matPorMov.get(m.id)||[]).join(' | '),'String','wrap'),
+      ], 18));
+    });
+    const s2 = _xSheet('Movimientos', [30,100,90,180,140,90,100,120,320], r2);
+
+    // ── HOJA 3: PRÉSTAMOS DE LIBROS (8 columnas) ─────────────
+    const H3 = ['N','ID','Libro','Prestatario','Tipo','Institucional','Fecha límite','Devuelto'];
+    const N3 = H3.length;
+    const r3 = [];
+    r3.push(_xHdr(`PRESTAMOS DE LIBROS — ${nom} ${ano}`, 'tit', N3));
+    r3.push(_xRow(H3.map(h => _xC(h,'String','ch')), 20));
+    const tipoLibLbl = { estudiante:'Estudiante', colaborador:'Colaborador', institucional:'Institucional' };
+    LIB.forEach((l,i) => {
+      const estado = l.es_institucional ? '—' : estadoPrestamo(l.fecha_devolucion_real, l.fecha_limite_devolucion);
+      const sid = !l.es_institucional ? (sidEstado[estado]||'def') : (i%2===0?'def':'alt');
+      r3.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(l.id_prestamo||'','String',sid), _xC(l.libro_titulo||'','String',sid),
+        _xC(l.prestatario_nombre||'','String',sid), _xC(tipoLibLbl[l.tipo_prestatario]||l.tipo_prestatario,'String',sid),
+        _xC(l.es_institucional?'Sí':'No','String',sid),
+        _xC(l.fecha_limite_devolucion||'','String',sid),
+        _xC(l.fecha_devolucion_real ? _xFecha(l.fecha_devolucion_real) : '','String',sid),
+      ], 18));
+    });
+    const s3 = _xSheet('Prestamos Libros', [30,100,220,180,110,90,100,120], r3);
+
+    _xDl(`Biblioteca_Materiales_${nom}_${ano}.xls`, [s1, s2, s3]);
+    toast('Excel de materiales descargado.', 'success');
   } catch(e) { toast('Error al generar Excel: ' + e.message, 'error'); }
 }

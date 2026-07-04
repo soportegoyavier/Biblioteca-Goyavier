@@ -40,6 +40,119 @@ async function cargarDashboard() {
     console.error('cargarDashboard:', e);
     el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p style="color:var(--red)">${e.message}</p></div>`;
   }
+  cargarAlertasPrestamos(); // independiente del bloque anterior, no bloquea el resto del dashboard
+  cargarDeudores();         // idem
+}
+
+// ── DEUDORES (Ventas) — misma agregación que Caja → Deudas ────
+async function cargarDeudores() {
+  const el = document.getElementById('dash-deudores');
+  if (!el) return;
+  el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
+  try {
+    const { data: trabajos, error } = await _sb.from('bib_trabajos_personal')
+      .select('id,nombre,precio_total,valor_pagado,solicitud_id,bib_solicitudes(remitente_email)').gt('precio_total', 0);
+    if (error) throw error;
+
+    const deudas = {};
+    (trabajos||[]).forEach(t => {
+      const saldo = (t.precio_total||0) - (t.valor_pagado||0);
+      if (saldo < 0.01) return;
+      const email = t.bib_solicitudes?.remitente_email || '—';
+      if (!deudas[email]) deudas[email] = { email, total: 0 };
+      deudas[email].total += saldo;
+    });
+    const lista = Object.values(deudas).sort((a,b) => b.total - a.total);
+
+    if (!lista.length) {
+      el.innerHTML = '<div class="empty"><div class="eico"><i class="fa fa-circle-check"></i></div><p>Sin deudas pendientes</p></div>';
+      return;
+    }
+    const totDeuda = lista.reduce((a,d) => a + d.total, 0);
+    el.innerHTML = `<div class="tw"><table>
+      <thead><tr><th>Remitente</th><th>Saldo pendiente</th></tr></thead>
+      <tbody>${lista.slice(0, 8).map(d => `<tr onclick="irACajaDeudas()" style="cursor:pointer">
+        <td>${escHtml(d.email)}</td>
+        <td style="color:var(--red);font-weight:700">${fmtPesos(d.total)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div style="text-align:right;font-size:12px;color:var(--muted);margin-top:6px">
+      Total pendiente: <strong style="color:var(--red)">${fmtPesos(totDeuda)}</strong> · ${lista.length} persona${lista.length!==1?'s':''} ·
+      <a href="#" onclick="event.preventDefault();irACajaDeudas()" style="color:var(--accent)">ver todo en Caja</a>
+    </div>`;
+  } catch(e) {
+    console.error('cargarDeudores:', e);
+    el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p style="color:var(--red)">${e.message}</p></div>`;
+  }
+}
+
+function irACajaDeudas() {
+  const navEl = document.querySelector('.ni[data-page="caja"]');
+  navTo('caja', navEl);
+  setCajaTab('deudas', document.getElementById('cajatab-deudas'));
+}
+
+// ── ALERTAS DE PRÉSTAMOS (materiales y libros) ─────────────────
+async function cargarAlertasPrestamos() {
+  const el = document.getElementById('dash-alertas-prestamos');
+  if (!el) return;
+  el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
+  try {
+    const [rMov, rLib] = await Promise.all([
+      _sb.from('bib_movimientos')
+        .select('id,id_movimiento,colaborador_nombre,fecha_limite_devolucion')
+        .in('tipo', ['prestamo','asignacion'])
+        .is('fecha_devolucion_real', null)
+        .not('fecha_limite_devolucion', 'is', null),
+      _sb.from('bib_prestamos_libros')
+        .select('id,id_prestamo,libro_titulo,prestatario_nombre,fecha_limite_devolucion')
+        .eq('es_institucional', false)
+        .is('fecha_devolucion_real', null)
+        .not('fecha_limite_devolucion', 'is', null),
+    ]);
+    if (rMov.error) throw rMov.error;
+    if (rLib.error) throw rLib.error;
+
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    const clasificar = (fechaStr) => {
+      const lim = new Date(fechaStr + 'T00:00:00');
+      const dias = Math.round((lim - hoy) / 86400000);
+      if (dias < 0)   return { estado:'vencido', texto:`Vencido hace ${-dias} día${-dias===1?'':'s'}` };
+      if (dias === 0) return { estado:'hoy',     texto:'Vence hoy' };
+      if (dias === 1) return { estado:'manana',  texto:'Vence mañana' };
+      return null;
+    };
+
+    const items = [];
+    (rMov.data||[]).forEach(m => {
+      const c = clasificar(m.fecha_limite_devolucion);
+      if (c) items.push({ ...c, tipo:'movimiento', id:m.id, ref:m.id_movimiento, nombre:m.colaborador_nombre });
+    });
+    (rLib.data||[]).forEach(l => {
+      const c = clasificar(l.fecha_limite_devolucion);
+      if (c) items.push({ ...c, tipo:'libro', id:l.id, ref:l.id_prestamo, nombre:`${l.libro_titulo} — ${l.prestatario_nombre}` });
+    });
+
+    const orden = { vencido:0, hoy:1, manana:2 };
+    items.sort((a,b) => orden[a.estado] - orden[b.estado]);
+
+    if (!items.length) {
+      el.innerHTML = '<div class="empty"><div class="eico"><i class="fa fa-circle-check"></i></div><p>Sin préstamos por vencer</p></div>';
+      return;
+    }
+    const colorEstado = { vencido:'var(--red)', hoy:'var(--amber)', manana:'var(--blue)' };
+    el.innerHTML = `<div class="tw"><table>
+      <thead><tr><th>Referencia</th><th>Detalle</th><th>Estado</th></tr></thead>
+      <tbody>${items.map(it => `<tr onclick="irADetalleDesdeAlerta('${it.tipo}',${it.id})" style="cursor:pointer">
+        <td class="td-id">${escHtml(it.ref || '—')}</td>
+        <td>${escHtml(it.nombre || '—')}</td>
+        <td style="color:${colorEstado[it.estado]};font-weight:600">${it.texto}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+  } catch(e) {
+    console.error('cargarAlertasPrestamos:', e);
+    el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p style="color:var(--red)">${e.message}</p></div>`;
+  }
 }
 
 function renderRecientes(rows) {
