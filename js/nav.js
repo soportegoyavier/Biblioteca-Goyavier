@@ -7,7 +7,8 @@ function navTo(page, el, mobId) {
   const titulos = {
     dashboard:'Dashboard', copias:'Gestión de Copias', reportes:'Reportes',
     ventas:'Ventas / Personal', caja:'Caja', notificaciones:'Notificaciones',
-    colaboradores:'Colaboradores', materiales:'Materiales y Préstamos'
+    colaboradores:'Colaboradores', materiales:'Materiales y Préstamos',
+    auditoria:'Auditoría'
   };
   document.getElementById('topbar-title').textContent = titulos[page] || page;
 
@@ -20,7 +21,7 @@ function navTo(page, el, mobId) {
   const esCopias = page === 'copias';
   const esVentas = page === 'ventas';
   document.getElementById('mes-nav').style.display  = (esCopias || esVentas) ? '' : 'none';
-  document.getElementById('btn-sync').style.display = (esCopias || esVentas) ? '' : 'none';
+  _actualizarBtnSync();
 
   if (page === 'dashboard')      cargarDashboard();
   if (page === 'copias')         cargarSolicitudes();
@@ -30,8 +31,24 @@ function navTo(page, el, mobId) {
   if (page === 'notificaciones') { cargarNotificaciones(); cargarTiposCopia(); }
   if (page === 'colaboradores')  cargarColaboradores();
   if (page === 'materiales')     cargarMateriales();
+  if (page === 'auditoria')      cargarAuditoria();
 
   toggleMobileMenu(false); // si se navegó desde el drawer móvil, se cierra solo
+}
+
+// Solo se puede sincronizar el mes actual: sincronizar un mes pasado
+// termino siendo la via para reimportar por accidente correos que ya
+// fueron eliminados/bloqueados a proposito, ademas de no tener sentido
+// una vez que archivarAdjuntosAntiguos() (WebApp_Backend.gs) ya movio
+// los archivos de ese mes a Drive.
+function _actualizarBtnSync() {
+  const btn = document.getElementById('btn-sync');
+  if (!btn) return;
+  const esCopiasOVentas = _pagina === 'copias' || _pagina === 'ventas';
+  const esMesActual     = _ano === _hoy.getFullYear() && _mes === _hoy.getMonth();
+  btn.style.display = esCopiasOVentas ? '' : 'none';
+  btn.disabled       = !esMesActual;
+  btn.title          = esMesActual ? '' : 'Solo se puede sincronizar el mes actual';
 }
 
 // ── DRAWER MÓVIL (hamburguesa) ─────────────────────────────────
@@ -53,6 +70,7 @@ function refreshPage() {
   else if (_pagina === 'notificaciones') { cargarNotificaciones(); cargarTiposCopia(); }
   else if (_pagina === 'colaboradores')  cargarColaboradores();
   else if (_pagina === 'materiales')     cargarMateriales();
+  else if (_pagina === 'auditoria')      cargarAuditoria();
 }
 
 // ── MES ──────────────────────────────────────────────────────
@@ -68,12 +86,16 @@ function cambiarMes(d) {
   if (_mes < 0)  { _mes = 11; _ano--; }
   if (_mes > 11) { _mes = 0;  _ano++; }
   actualizarMesLabel();
+  _actualizarBtnSync();
   if (_pagina === 'copias') cargarSolicitudes();
   if (_pagina === 'ventas') cargarVentas();
 }
 
 // ── SINCRONIZAR ──────────────────────────────────────────────
 async function sincronizar() {
+  const esMesActual = _ano === _hoy.getFullYear() && _mes === _hoy.getMonth();
+  if (!esMesActual) { toast('Solo se puede sincronizar el mes actual', 'error'); return; }
+
   const btn = document.getElementById('btn-sync');
   const ico = document.getElementById('sync-ico');
   const lbl = document.getElementById('sync-lbl');
@@ -123,7 +145,7 @@ async function sincronizar() {
   } catch(e) {
     toast('Error al sincronizar: ' + e.message, 'error');
   } finally {
-    if (btn) btn.disabled = false;
+    _actualizarBtnSync();
     if (ico) ico.className = 'fa fa-rotate-right';
     lbl.textContent = 'Sincronizar';
   }

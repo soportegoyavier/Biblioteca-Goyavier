@@ -56,9 +56,34 @@ function doGet(e) {
 
 function despachar(p) {
   switch (p.accion) {
-    case "sincronizarCorreos": return sincronizarCorreos(p);
-    case "enviarCorreo":       return enviarCorreo(p);
+    case "sincronizarCorreos":     return sincronizarCorreos(p);
+    case "enviarCorreo":           return _enviarCorreoConReintento(p);
+    case "estadoAutomatizacion":   return _estadoAutomatizacion();
+    case "ejecutarReconciliacion": return _ejecutarReconciliacionManual();
+    case "reprocesarCorreoManual": return reprocesarCorreo(p.gmailMsgId);
+    case "reprocesarDesdeManual":  return reprocesarDesde(p.fecha);
+    case "reintentarCorreoFallido": return _reintentarCorreoFallido(p.id);
+    case "generarReporteManual":   return _exportarMes(parseInt(p.ano), parseInt(p.mes));
+    case "eliminarSolicitud":      return _eliminarSolicitud(p.id, p.motivo);
+    case "archivarAdjuntosAntiguos": return archivarAdjuntosAntiguos();
+    case "responderCorreo":        return _responderCorreo(p.gmailMessageId, p.mensaje);
     default: return { error: "Acción no reconocida: " + p.accion };
+  }
+}
+
+// ── Centro de Salud (Fase 2): lo único que solo Apps Script puede ver
+// sobre sí mismo — qué triggers existen y bajo qué cuenta corre. NO
+// incluye ejecuciones fallidas/en curso: eso requiere habilitar la
+// Apps Script API de Google Cloud con OAuth aparte, deliberadamente
+// fuera de alcance de esta fase (ver propuesta original).
+function _estadoAutomatizacion() {
+  try {
+    var triggers = ScriptApp.getProjectTriggers().map(function(t) {
+      return { funcion: t.getHandlerFunction(), tipo: t.getEventType().toString() };
+    });
+    return { ok: true, triggers: triggers, cuentaGAS: Session.getEffectiveUser().getEmail() };
+  } catch(e) {
+    return { ok: false, error: e.toString() };
   }
 }
 
@@ -115,12 +140,68 @@ function _paginaConfirmacion(sid, tabla, descripcion) {
 //   1. Setup paralelo: lista blanca + IDs existentes en un solo fetchAll
 //   2. IDs limitados a ventana de 3 meses (no carga toda la historia)
 //   3. Paginación por lotes: startOffset + maxMessages (8 por defecto)
-//   4. Uploads de adjuntos en PARALELO por mensaje (UrlFetchApp.fetchAll)
+//   4. Adjuntos: uno por uno, DELIBERADAMENTE secuencial (ver nota abajo)
 //   5. Batch insert de solicitudes en un solo POST
 //   6. Batch insert de documentos en un solo POST
-//   7. maxMs 22 segundos → responde siempre antes del timeout del navegador
+//   7. maxMs se verifica de verdad dentro del bucle de adjuntos (corta el
+//      lote a tiempo en vez de solo prometerlo en un comentario)
+//
+// Por que los adjuntos NO se paralelizan con UrlFetchApp.fetchAll:
+// se probo antes y causo errores de memoria (OOM) al mantener varios
+// archivos grandes en memoria a la vez para subirlos juntos — por eso
+// el historial de commits lo volvio secuencial. Paralelizar de nuevo
+// reintroduciria ese bug ya corregido. La mitigacion real del tiempo de
+// ejecucion es el corte por maxMs (punto 7), no la paralelizacion.
 // ============================================================
+// Envoltorio con bloqueo: evita que dos ejecuciones de sincronizarCorreos
+// corran en paralelo (dos personas sincronizando a la vez desde Copias y
+// Ventas, o doble clic). Sin esto, ambas leerían el mismo snapshot de
+// mensajes ya existentes antes de que ninguna insertara nada, pudiendo
+// crear solicitudes duplicadas y pisarse el checkpoint de bib_sync_estado.
+// ── Auditoría: eventos de proceso que un trigger de base de datos no
+// puede ver (no son cambios de fila, o importan incluso cuando fallan
+// antes de escribir nada). Nunca debe poder romper la operación que
+// está registrando — de ahí el try/catch propio.
+function _auditar(modulo, accion, resultado, gravedad, detalle, duracionMs) {
+  try {
+    var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+    if (!_url || !_key) return;
+    sbPost(_url, _key, 'bib_auditoria', {
+      usuario: 'sistema (GAS)', origen: 'gas', modulo: modulo, accion: accion,
+      resultado: resultado || 'ok', gravedad: gravedad || 'info', detalle: detalle || null,
+      duracion_ms: (duracionMs === undefined || duracionMs === null) ? null : duracionMs
+    });
+  } catch(e) {
+    Logger.log('_auditar error (no crítico): ' + e.toString());
+  }
+}
+
 function sincronizarCorreos(params) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) {
+    return { ok: false, locked: true, error: "Ya hay una sincronización en curso. Intenta de nuevo en unos segundos." };
+  }
+  var t0 = Date.now();
+  try {
+    var res = _sincronizarCorreosImpl(params);
+    var dur = Date.now() - t0;
+    if (res && res.error) {
+      _auditar('sincronizacion', 'sincronizar', 'error', 'error', res.error, dur);
+    } else {
+      _auditar('sincronizacion', 'sincronizar', 'ok', 'info',
+        (res && res.agregados || 0) + ' nuevos, ' + (res && res.omitidos || 0) + ' omitidos, ' +
+        (res && res.parcial ? 'parcial' : 'completo'), dur);
+    }
+    return res;
+  } catch(e) {
+    _auditar('sincronizacion', 'sincronizar', 'error', 'critico', e.toString(), Date.now() - t0);
+    throw e;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function _sincronizarCorreosImpl(params) {
   var t0 = Date.now();
   var hoy = new Date();
   var mes         = (params && params.mes         !== undefined) ? parseInt(params.mes)         : hoy.getMonth();
@@ -251,19 +332,10 @@ function sincronizarCorreos(params) {
       var tipoRemitente = listaBlanca[emailRemit] || 'personal';
       if (!listaBlanca[emailRemit]) rechazados++; // conteo informativo (no institucional)
 
-      var emailDestino = emailRemit;
-      try {
-        var toList = msg.getTo().split(",");
-        for (var i = 0; i < toList.length; i++) {
-          var addr  = toList[i].trim();
-          var am    = addr.match(/<([^>]+)>/);
-          var ae    = am ? am[1].trim().toLowerCase() : addr.toLowerCase();
-          if (ae && ae !== emailBiblioteca) { emailDestino = ae; break; }
-        }
-      } catch(ex2) {}
+      var emailDestino = _detectarEmailDestino(msg, emailRemit, emailBiblioteca);
 
       nuevos.push({ msg: msg, msgId: msgId, fechaMsg: fechaMsg, remitenteRaw: remitenteRaw,
-                    emailRemit: emailRemit, tipoRemitente: tipoRemitente, emailDestino: emailDestino });
+                    emailRemit: emailRemit, tipoRemitente: tipoRemitente, emailDestino: emailDestino, threadIdx: t });
     }
   }
 
@@ -279,8 +351,21 @@ function sincronizarCorreos(params) {
   }
 
   // ── 4. Adjuntos: uno por uno para evitar OOM con archivos grandes ──
+  // Presupuesto de tiempo real: si un lote con adjuntos pesados se acerca a
+  // maxMs, se corta AQUI (antes de insertar nada) y se devuelve un nextOffset
+  // que retoma desde el thread del primer mensaje no procesado — nunca se
+  // pierde ni se duplica nada porque esos mensajes simplemente no entran a
+  // "nuevos" en esta llamada y se re-detectan en la siguiente (idsExistentes
+  // no los tiene todavia).
   var MAX_BYTES_SYNC = 40 * 1024 * 1024; // 40 MB por archivo (UrlFetchApp soporta hasta 50MB)
+  var cortadoPorTiempo = false;
+  var procesados = nuevos.length;
   for (var n = 0; n < nuevos.length; n++) {
+    if (Date.now() - t0 > maxMs) {
+      cortadoPorTiempo = true;
+      procesados = n;
+      break;
+    }
     var item     = nuevos[n];
     // 1. Adjuntos MIME + Drive adjuntos con botón nativo de Gmail
     var adjuntos = item.msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
@@ -291,6 +376,18 @@ function sincronizarCorreos(params) {
       itemDocs = itemDocs.concat(_procesarDriveLinks(driveLinks, item.msgId, MAX_BYTES_SYNC, SUPABASE_URL, SUPABASE_KEY));
     }
     item._docs = itemDocs;
+  }
+
+  if (cortadoPorTiempo) {
+    var primerNoProcesado = nuevos[procesados];
+    nextOffset = startOffset + primerNoProcesado.threadIdx;
+    hayMas = true;
+    nuevos = nuevos.slice(0, procesados);
+    ultimaFecha = null; // el checkpoint no debe avanzar: quedaron mensajes de este mismo lote sin procesar
+    Logger.log('Sync cortado por maxMs (' + maxMs + 'ms) en mensaje ' + procesados + '/' + (procesados + (nuevos.length - procesados)) + '. nextOffset=' + nextOffset);
+    if (!nuevos.length) {
+      return { ok: true, agregados: 0, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: true, nextOffset: nextOffset, ms: Date.now()-t0 };
+    }
   }
 
   // ── 5. Insertar solicitudes en un único batch POST ────────────
@@ -328,18 +425,56 @@ function sincronizarCorreos(params) {
   }
 
   // ── 6. Insertar documentos en un único batch POST ─────────────
+  // Correlación por gmail_message_id (no por posición): un INSERT masivo
+  // en Postgres suele devolver las filas en el mismo orden en que se
+  // enviaron, pero no es una garantía formal — un trigger futuro o un
+  // cambio de comportamiento de PostgREST podría romper esa suposición
+  // silenciosamente y adjuntar documentos a la solicitud equivocada.
+  var solPorMsgId = {};
+  (solRes || []).forEach(function(sol) { if (sol && sol.gmail_message_id) solPorMsgId[sol.gmail_message_id] = sol; });
+
   var docRows = [];
   for (var n2 = 0; n2 < nuevos.length; n2++) {
-    var sol = solRes[n2];
+    var sol = solPorMsgId[nuevos[n2].msgId];
     var sid = sol && sol.id;
-    if (!sid) continue;
+    if (!sid) {
+      // Antes esto se saltaba en silencio: si la solicitud no se pudo
+      // correlacionar de vuelta a su gmail_message_id, sus adjuntos (ya
+      // subidos a Storage en el paso 4) quedaban huerfanos sin dejar
+      // ningun rastro de por que.
+      if ((nuevos[n2]._docs || []).length) {
+        _auditar('sincronizacion', 'correlacion_documentos', 'error', 'error',
+          'gmail_message_id=' + nuevos[n2].msgId + ' no se encontro en la respuesta del insert de bib_solicitudes -- ' +
+          (nuevos[n2]._docs.length) + ' adjunto(s) ya subidos a Storage no se insertaron en bib_documentos');
+      }
+      continue;
+    }
     idsExistentes[nuevos[n2].msgId] = true;
     agregados++;
     (nuevos[n2]._docs || []).forEach(function(doc) {
       docRows.push({ solicitud_id: sid, nombre_archivo: doc.nombre_archivo, tipo_mime: doc.tipo_mime, tamano_bytes: doc.tamano_bytes, storage_path: doc.storage_path });
     });
   }
-  if (docRows.length) sbPostBatch(SUPABASE_URL, SUPABASE_KEY, "bib_documentos", docRows);
+  if (docRows.length) {
+    var docRes = sbPostBatch(SUPABASE_URL, SUPABASE_KEY, "bib_documentos", docRows);
+    if (!Array.isArray(docRes)) {
+      // Antes el resultado de este batch se descartaba sin revisar --
+      // era la unica asimetria real frente al insert de bib_solicitudes
+      // (que sí tiene reintento individual) y la causa mas probable de
+      // los huerfanos de Storage: el archivo ya estaba subido, pero su
+      // fila en bib_documentos nunca llegaba a existir y nadie se enteraba.
+      var _docErr = (docRes && docRes.error) ? String(docRes.error) : JSON.stringify(docRes);
+      Logger.log('Batch documentos error: ' + _docErr + ' -- reintentando individualmente');
+      var _docsGuardados = 0;
+      docRows.forEach(function(fila) {
+        var r = sbPost(SUPABASE_URL, SUPABASE_KEY, 'bib_documentos', fila);
+        if (Array.isArray(r) && r[0]) _docsGuardados++;
+      });
+      var _docsOk = _docsGuardados === docRows.length;
+      _auditar('sincronizacion', 'insertar_documentos', _docsOk ? 'ok' : 'error', _docsOk ? 'advertencia' : 'error',
+        'Batch fallo (' + _docErr.substring(0, 300) + '); reintento individual: ' + _docsGuardados + '/' + docRows.length + ' documento(s) guardados');
+    }
+  }
 
   // ── 7. Actualizar checkpoint ───────────────────────────────────
   if (esMesActual && ultimaFecha) {
@@ -374,6 +509,8 @@ function sincronizarCorreos(params) {
 function enviarCorreo(params) {
   try {
     if (!validarEmail(params.destinatario)) {
+      _auditar('correo', 'envio_correo', 'error', 'advertencia',
+        'Email destinatario inválido: ' + params.destinatario + ' (tipo=' + params.tipo + ')');
       return { ok: false, error: "Email destinatario inválido: " + params.destinatario };
     }
 
@@ -384,6 +521,8 @@ function enviarCorreo(params) {
       try {
         var nc = sbGet(_url, _key, "bib_notif_config?email=eq." + encodeURIComponent(params.destinatario) + "&select=activas");
         if (Array.isArray(nc) && nc.length > 0 && nc[0].activas === false) {
+          _auditar('correo', 'envio_correo', 'ok', 'info',
+            (params.tipo||'?') + ' → ' + params.destinatario + ': omitido (notificaciones desactivadas)');
           return { ok: true, skipped: true };
         }
       } catch(ex2) { /* si falla el check, se envía igual */ }
@@ -653,10 +792,84 @@ function enviarCorreo(params) {
       htmlBody: html,
       name:     "Biblioteca Goyavier"
     });
+    _auditar('correo', 'envio_correo', 'ok', 'info', (params.tipo||'?') + ' → ' + params.destinatario);
     return { ok: true };
 
   } catch (e) {
     Logger.log("enviarCorreo error: " + e.toString());
+    _auditar('correo', 'envio_correo', 'error', 'error',
+      (params.tipo||'?') + ' → ' + (params.destinatario||'?') + ': ' + e.toString());
+    return { ok: false, error: e.toString() };
+  }
+}
+
+// ── Diagnostico (Fase 4): envoltorio SOLO para el envio original
+// (despachar → "enviarCorreo"). Si falla, guarda el payload completo en
+// bib_correos_fallidos para poder reintentarlo despues. Los reintentos
+// mismos llaman a enviarCorreo() DIRECTAMENTE (ver _reintentarCorreoFallido),
+// nunca a este envoltorio -- si tambien pasaran por aqui, cada intento
+// fallido crearia una fila nueva en vez de actualizar la existente.
+function _enviarCorreoConReintento(params) {
+  var res = enviarCorreo(params);
+  if (res && !res.ok && !res.skipped) {
+    _guardarCorreoFallido(params, res.error || 'Error desconocido');
+  }
+  return res;
+}
+
+function _guardarCorreoFallido(params, error) {
+  try {
+    var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+    if (!_url || !_key) return;
+    sbPost(_url, _key, 'bib_correos_fallidos', {
+      params: params, error: String(error).substring(0, 1000)
+    });
+  } catch(e2) {
+    Logger.log('_guardarCorreoFallido error (no critico): ' + e2.toString());
+  }
+}
+
+// Reintenta un correo guardado en bib_correos_fallidos usando el mismo
+// payload original. Actualiza la MISMA fila (resuelto=true o suma un
+// intento) en vez de crear una nueva -- por eso llama a enviarCorreo()
+// puro y no a _enviarCorreoConReintento().
+function _reintentarCorreoFallido(id) {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return { ok: false, error: 'Faltan credenciales de Supabase' };
+  var filas = sbGet(_url, _key, 'bib_correos_fallidos?id=eq.' + encodeURIComponent(id) + '&select=*');
+  if (!Array.isArray(filas) || !filas.length) return { ok: false, error: 'No se encontró el registro #' + id };
+  var fila = filas[0];
+  var res = enviarCorreo(fila.params);
+  if (res && res.ok) {
+    sbPatch(_url, _key, 'bib_correos_fallidos?id=eq.' + encodeURIComponent(id),
+      { resuelto: true, resuelto_en: new Date().toISOString() });
+  } else {
+    sbPatch(_url, _key, 'bib_correos_fallidos?id=eq.' + encodeURIComponent(id), {
+      intentos: (fila.intentos || 0) + 1,
+      error: (res && res.error) || 'Error desconocido',
+      ultimo_intento_en: new Date().toISOString()
+    });
+  }
+  return res;
+}
+
+// ── Respuesta manual a un correo (NO automática) ──────────────
+// El usuario decide qué escribir y cuándo — pensado para los casos
+// donde una solicitud llegó sin adjuntos o con un link de Drive sin
+// permiso: hoy el sistema detecta ambas cosas pero no hay forma de
+// avisarle al remitente. Usa msg.reply() (no GmailApp.sendEmail) para
+// que quede en el MISMO hilo de Gmail — el remitente lo ve como una
+// respuesta normal, no como un correo nuevo y desconectado.
+function _responderCorreo(gmailMessageId, mensaje) {
+  if (!gmailMessageId) return { ok: false, error: 'gmailMessageId requerido' };
+  if (!mensaje || !mensaje.trim()) return { ok: false, error: 'El mensaje no puede estar vacío' };
+  try {
+    var msg = GmailApp.getMessageById(gmailMessageId);
+    msg.reply(mensaje, { name: 'Biblioteca Goyavier' });
+    _auditar('correo', 'responder_correo', 'ok', 'info', 'Respuesta manual enviada (gmail_message_id=' + gmailMessageId + ')');
+    return { ok: true };
+  } catch(e) {
+    _auditar('correo', 'responder_correo', 'error', 'error', 'gmail_message_id=' + gmailMessageId + ': ' + e.toString());
     return { ok: false, error: e.toString() };
   }
 }
@@ -816,6 +1029,303 @@ function verificarFechasMes() {
     try { _exportarMes(hoy.getFullYear(), hoy.getMonth()); }
     catch(e) { _notificarError('exportarMes', e.toString()); }
   }
+  try { _verificarReconciliacionStorage(); }
+  catch(e) { _notificarError('reconciliacionStorage', e.toString()); }
+  try { _verificarAlertas(); }
+  catch(e) { _notificarError('verificarAlertas', e.toString()); }
+  try { archivarAdjuntosAntiguos(); }
+  catch(e) { _notificarError('archivarAdjuntosAntiguos', e.toString()); }
+}
+
+// ── Revisa bib_vista_alertas (umbrales de errores por modulo, ver
+// sql/023_alertas.sql) y notifica por correo si algo esta en alerta.
+// Corre junto al resto de verificarFechasMes, una vez al dia — el
+// Visor de Alertas del frontend consulta la misma vista en vivo, asi
+// que esto es solo el aviso proactivo diario, no la unica forma de ver
+// una alerta activa.
+function _verificarAlertas() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return;
+  var filas;
+  try {
+    filas = sbGet(_url, _key, 'bib_vista_alertas?select=*');
+  } catch(e) {
+    Logger.log('Verificacion de alertas error: ' + e.toString());
+    _auditar('alertas', 'verificar_alertas', 'error', 'error', e.toString());
+    return;
+  }
+  if (!Array.isArray(filas) || !filas.length) {
+    Logger.log('Verificacion de alertas: sin alertas activas.');
+    _auditar('alertas', 'verificar_alertas', 'ok', 'info', 'Sin alertas activas');
+    return;
+  }
+  var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
+  var cuerpo = 'Se detectaron ' + filas.length + ' modulo(s) con errores por encima del umbral en las ultimas 24 horas:\n\n' +
+    filas.map(function(f) {
+      return '[' + f.gravedad.toUpperCase() + '] ' + f.modulo + ': ' + f.cantidad + ' errores (umbral: ' + f.umbral + ')';
+    }).join('\n') +
+    '\n\nRevisa el detalle en la pestana Alertas de la pagina Auditoria.';
+  GmailApp.sendEmail(emailDest, 'Biblioteca: ' + filas.length + ' alerta(s) activa(s)', cuerpo, { name: 'Biblioteca Goyavier' });
+  Logger.log('Verificacion de alertas: ' + filas.length + ' alerta(s) notificada(s).');
+  _auditar('alertas', 'verificar_alertas', 'ok', 'advertencia', filas.length + ' alerta(s) notificada(s) por correo');
+}
+
+// ── Detecta archivos huérfanos entre Storage y bib_documentos ──
+// Corre todos los días junto al resto de verificarFechasMes. Si algo se
+// pierde a mitad de un timeout de sincronizarCorreos, esto lo detecta
+// aunque nadie lo esté buscando manualmente.
+function _verificarReconciliacionStorage() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return;
+  var res = UrlFetchApp.fetch(_url + '/rest/v1/rpc/bib_fn_reconciliar_storage', {
+    method: 'POST',
+    headers: { 'apikey': _key, 'Authorization': 'Bearer ' + _key, 'Content-Type': 'application/json' },
+    payload: '{}',
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 400) {
+    Logger.log('Reconciliacion storage error: ' + res.getContentText());
+    _auditar('reconciliacion', 'reconciliar_storage', 'error', 'error', res.getContentText().substring(0, 500));
+    return;
+  }
+  var filas = JSON.parse(res.getContentText());
+  if (!Array.isArray(filas) || !filas.length) {
+    Logger.log('Reconciliacion storage: sin inconsistencias.');
+    _auditar('reconciliacion', 'reconciliar_storage', 'ok', 'info', 'Sin inconsistencias');
+    return;
+  }
+  var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
+  var cuerpo = 'Se encontraron ' + filas.length + ' inconsistencias entre Storage y bib_documentos:\n\n' +
+    filas.map(function(f){ return '[' + f.tipo + '] ' + f.ruta + ' - ' + f.detalle; }).join('\n');
+  GmailApp.sendEmail(emailDest, 'Biblioteca: inconsistencias Storage/BD detectadas (' + filas.length + ')',
+    cuerpo, { name: 'Biblioteca Goyavier' });
+  Logger.log('Reconciliacion storage: ' + filas.length + ' inconsistencias encontradas y notificadas.');
+  _auditar('reconciliacion', 'reconciliar_storage', 'ok', 'advertencia',
+    filas.length + ' inconsistencias encontradas y notificadas por correo');
+}
+
+// ── Diagnostico (Fase 4): version "on demand" para el boton del panel.
+// Misma llamada RPC que _verificarReconciliacionStorage(), pero SI
+// devuelve las filas al llamador (para mostrarlas de inmediato en la
+// pantalla) y NO manda correo -- quien la ejecuta ya esta mirando la
+// pantalla, no necesita ademas un email.
+function _ejecutarReconciliacionManual() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return { ok: false, error: 'Faltan SUPABASE_URL/SUPABASE_KEY en Script Properties' };
+  var res = UrlFetchApp.fetch(_url + '/rest/v1/rpc/bib_fn_reconciliar_storage', {
+    method: 'POST',
+    headers: { 'apikey': _key, 'Authorization': 'Bearer ' + _key, 'Content-Type': 'application/json' },
+    payload: '{}',
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 400) {
+    _auditar('reconciliacion', 'reconciliar_storage', 'error', 'error', res.getContentText().substring(0, 500));
+    return { ok: false, error: res.getContentText() };
+  }
+  var filas = JSON.parse(res.getContentText());
+  var hayFilas = Array.isArray(filas) && filas.length > 0;
+  _auditar('reconciliacion', 'reconciliar_storage', 'ok', hayFilas ? 'advertencia' : 'info',
+    (hayFilas ? filas.length + ' inconsistencias encontradas' : 'Sin inconsistencias') + ' (ejecución manual)');
+  return { ok: true, filas: filas || [] };
+}
+
+// ── Borra archivos de Storage con la service_role key ─────────
+// El navegador (rol authenticated) llamaba a _sb.storage.remove()
+// directo y no fallaba con un error visible, pero tampoco borraba de
+// verdad -- probablemente una policy de Storage que no cubre archivos
+// subidos originalmente por el service_role (los que suben Gmail/GAS).
+// Centralizar el borrado aqui, con la key que SI tiene permiso total
+// (ya probado: la usa limpiarHuerfanosSinDueno), evita tener que
+// adivinar/ajustar policies de Storage que no se pueden inspeccionar
+// desde este entorno.
+function _borrarArchivosStorage(rutas) {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return { ok: false, error: 'Faltan credenciales de Supabase' };
+  if (!Array.isArray(rutas) || !rutas.length) return { ok: true, borrados: 0 };
+  var borrados = 0;
+  for (var i = 0; i < rutas.length; i += 100) {
+    var lote = rutas.slice(i, i + 100);
+    var delResp = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos', {
+      method: 'DELETE',
+      headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json' },
+      payload: JSON.stringify({ prefixes: lote }),
+      muteHttpExceptions: true
+    });
+    if (delResp.getResponseCode() < 400) {
+      borrados += lote.length;
+    } else {
+      Logger.log('_borrarArchivosStorage: error en lote desde indice ' + i + ': ' + delResp.getContentText());
+    }
+  }
+  return { ok: true, borrados: borrados };
+}
+
+// ── Elimina una solicitud completa desde el servidor ──────────
+// Antes esto lo hacia confirmarEliminar() en modals.js directo desde el
+// navegador: borraba bien la fila pero el archivo de Storage se quedaba
+// huerfano (ver _borrarArchivosStorage arriba). Aqui se hace todo con
+// la service_role key en un solo lugar: registrar en ignorados, borrar
+// Storage, borrar pagos, borrar la solicitud (cascade se lleva
+// documentos/trabajos/historial).
+function _eliminarSolicitud(solicitudId, motivo) {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return { ok: false, error: 'Faltan credenciales de Supabase' };
+  if (!solicitudId) return { ok: false, error: 'solicitudId requerido' };
+
+  var sol = sbGet(_url, _key, 'bib_solicitudes?id=eq.' + encodeURIComponent(solicitudId) + '&select=gmail_message_id,remitente_email,asunto');
+  if (!Array.isArray(sol) || !sol[0]) return { ok: false, error: 'Solicitud id=' + solicitudId + ' no encontrada' };
+  var s = sol[0];
+
+  if (s.gmail_message_id) {
+    UrlFetchApp.fetch(_url + '/rest/v1/bib_mensajes_ignorados?on_conflict=gmail_message_id', {
+      method: 'POST',
+      headers: {
+        apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal'
+      },
+      payload: JSON.stringify({
+        gmail_message_id: s.gmail_message_id,
+        remitente_email:  s.remitente_email || null,
+        asunto:           s.asunto          || null,
+        motivo:           motivo            || null
+      }),
+      muteHttpExceptions: true
+    });
+  }
+
+  var docsViejos = sbGet(_url, _key, 'bib_documentos?solicitud_id=eq.' + solicitudId + '&select=storage_path&storage_path=not.is.null');
+  var rutas = (Array.isArray(docsViejos) ? docsViejos : []).map(function(d) { return d.storage_path; });
+  var storageRes = _borrarArchivosStorage(rutas);
+  if (rutas.length && (!storageRes.ok || storageRes.borrados < rutas.length)) {
+    _auditar('correo', 'eliminar_solicitud', 'error', 'advertencia',
+      'Solicitud id=' + solicitudId + ': solo ' + (storageRes.borrados || 0) + '/' + rutas.length + ' archivo(s) de Storage borrados');
+  }
+
+  UrlFetchApp.fetch(_url + '/rest/v1/bib_pagos?solicitud_id=eq.' + solicitudId,
+    { method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true });
+
+  var delSol = UrlFetchApp.fetch(_url + '/rest/v1/bib_solicitudes?id=eq.' + solicitudId,
+    { method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true });
+  if (delSol.getResponseCode() >= 400) {
+    _auditar('correo', 'eliminar_solicitud', 'error', 'error',
+      'Error borrando solicitud id=' + solicitudId + ': ' + delSol.getContentText().substring(0, 300));
+    return { ok: false, error: delSol.getContentText() };
+  }
+
+  _auditar('correo', 'eliminar_solicitud', 'ok', 'info',
+    'Solicitud id=' + solicitudId + ' eliminada (' + (storageRes.borrados || 0) + ' archivo(s) de Storage borrados)');
+  return { ok: true };
+}
+
+// ── Limpieza ÚNICA de huérfanos sin dueño ─────────────────────
+// Los archivos que bib_fn_recuperar_huerfanos() (sql/025) no pudo
+// recuperar (resultado='sin_solicitud_coincidente') no perdieron el
+// vínculo por error: su solicitud fue eliminada a propósito con
+// "Eliminar correo" (antes de que esa función tuviera el fix de
+// también borrar Storage — ver confirmarEliminar() en modals.js).
+// Recrearles una solicitud sería revivir algo que alguien ya decidió
+// borrar; lo correcto es terminar de borrarlos de Storage.
+// Correr UNA VEZ desde el editor de Apps Script (seleccionar esta
+// función → Ejecutar) — no está expuesta a la app a propósito, es
+// limpieza de datos históricos, no una acción recurrente.
+function limpiarHuerfanosSinDueno() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) { Logger.log('Faltan SUPABASE_URL/SUPABASE_KEY en Script Properties'); return; }
+
+  var res = UrlFetchApp.fetch(_url + '/rest/v1/rpc/bib_fn_listar_huerfanos_sin_dueno', {
+    method: 'POST',
+    headers: { 'apikey': _key, 'Authorization': 'Bearer ' + _key, 'Content-Type': 'application/json' },
+    payload: '{}',
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 400) { Logger.log('Error listando huérfanos sin dueño: ' + res.getContentText()); return; }
+
+  var filas  = JSON.parse(res.getContentText());
+  var rutas  = (Array.isArray(filas) ? filas : []).map(function(f) { return f.storage_path; });
+  if (!rutas.length) { Logger.log('No hay huérfanos sin dueño para borrar.'); return; }
+
+  var borrados = 0;
+  for (var i = 0; i < rutas.length; i += 100) {
+    var lote = rutas.slice(i, i + 100);
+    var delResp = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos', {
+      method: 'DELETE',
+      headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json' },
+      payload: JSON.stringify({ prefixes: lote }),
+      muteHttpExceptions: true
+    });
+    if (delResp.getResponseCode() < 400) {
+      borrados += lote.length;
+    } else {
+      Logger.log('Error borrando lote desde índice ' + i + ': ' + delResp.getContentText());
+    }
+  }
+  Logger.log('Limpieza de huérfanos sin dueño: ' + borrados + ' de ' + rutas.length + ' archivo(s) borrados.');
+  _auditar('reconciliacion', 'limpiar_huerfanos_sin_dueno', 'ok', 'info',
+    borrados + ' de ' + rutas.length + ' archivo(s) sin solicitud borrados de Storage (ejecución manual única)');
+}
+
+// ── Limpieza ÚNICA: nombres feos de bib_fn_recuperar_huerfanos() ──
+// Esa función (sql/025) reconstruyó nombre_archivo tomando "todo lo
+// que sigue a la primera barra" del storage_path. Para adjuntos que
+// originalmente eran links de Drive en el cuerpo del correo, esa ruta
+// tiene la forma "drive_<ID de Drive>_nombre.pdf" (ver
+// _procesarDriveLinks) — el nombre recuperado quedó feo, con el ID
+// de Drive metido en el medio.
+//
+// Para cada fila con ese patrón y ya archivada (drive_link existe): se
+// extrae el ID de la URL de Drive (delimitador "/d/", sin ambigüedad,
+// a diferencia de intentar adivinar dónde termina el ID dentro del
+// nombre feo) y se le pregunta a Drive su nombre real. Si además existe,
+// en la misma solicitud, una fila "muerta" (sin storage_path ni
+// drive_link, "Sin archivo") con exactamente ese nombre limpio, es un
+// duplicado de cuando el archivo aún no se había recuperado — se borra,
+// porque su contenido real ya vive en la fila que se acaba de renombrar.
+//
+// Solo cubre filas YA archivadas (con drive_link) porque solo ahí el ID
+// se puede extraer sin ambigüedad. Las que todavía están en Storage con
+// el nombre feo se resuelven solas si se vuelve a correr esta misma
+// función después de que archivarAdjuntosAntiguos() las archive.
+// Correr desde el editor de Apps Script — no está expuesta a la app.
+function limpiarNombresRecuperados() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) { Logger.log('Faltan credenciales de Supabase'); return; }
+
+  var candidatos = sbGet(_url, _key, 'bib_documentos?select=id,solicitud_id,nombre_archivo,drive_link&drive_link=not.is.null');
+  if (!Array.isArray(candidatos)) { Logger.log('Error consultando bib_documentos: ' + JSON.stringify(candidatos)); return; }
+  var feos = candidatos.filter(function(f) { return f.nombre_archivo && f.nombre_archivo.indexOf('drive_') === 0; });
+  if (!feos.length) { Logger.log('No hay nombres feos pendientes de limpiar.'); return; }
+
+  var renombrados = 0, borrados = 0, sinResolver = 0;
+  feos.forEach(function(f) {
+    try {
+      var m = /\/d\/([a-zA-Z0-9_-]+)/.exec(f.drive_link);
+      if (!m) { sinResolver++; Logger.log('No se pudo extraer ID de Drive de: ' + f.drive_link); return; }
+      var nombreReal = DriveApp.getFileById(m[1]).getName();
+
+      var muertos = sbGet(_url, _key,
+        'bib_documentos?select=id&solicitud_id=eq.' + f.solicitud_id +
+        '&nombre_archivo=eq.' + encodeURIComponent(nombreReal) +
+        '&storage_path=is.null&drive_link=is.null'
+      );
+      if (Array.isArray(muertos) && muertos.length) {
+        muertos.forEach(function(mu) {
+          UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?id=eq.' + mu.id,
+            { method: 'DELETE', headers: { apikey: _key, Authorization: 'Bearer ' + _key, Prefer: 'return=minimal' }, muteHttpExceptions: true });
+          borrados++;
+        });
+      }
+
+      sbPatch(_url, _key, 'bib_documentos?id=eq.' + f.id, { nombre_archivo: nombreReal });
+      renombrados++;
+    } catch(e) {
+      sinResolver++;
+      Logger.log('Error resolviendo id=' + f.id + ': ' + e.toString());
+    }
+  });
+
+  Logger.log('Limpieza de nombres: ' + renombrados + ' renombrados, ' + borrados + ' duplicado(s) muerto(s) borrados, ' + sinResolver + ' sin resolver.');
+  _auditar('mantenimiento', 'limpiar_nombres_recuperados', 'ok', 'info',
+    renombrados + ' renombrado(s), ' + borrados + ' duplicado(s) borrado(s), ' + sinResolver + ' sin resolver');
 }
 
 // ── Ejecutar manualmente para probar sin esperar al fin de mes ─
@@ -826,6 +1336,18 @@ function exportarMesManual() {
 
 // ── Motor principal de exportación ───────────────────────────
 function _exportarMes(ano, mes) {
+  var t0 = Date.now();
+  try {
+    var res = _exportarMesImpl(ano, mes);
+    _auditar('reporte_mensual', 'generar_reporte', 'ok', 'info', res.nombre, Date.now() - t0);
+    return res;
+  } catch(e) {
+    _auditar('reporte_mensual', 'generar_reporte', 'error', 'error', ano + '-' + (mes+1) + ': ' + e.toString(), Date.now() - t0);
+    throw e;
+  }
+}
+
+function _exportarMesImpl(ano, mes) {
   var _url = _cfg('SUPABASE_URL');
   var _key = _cfg('SUPABASE_KEY');
   if (!_url || !_key) throw new Error('SUPABASE_URL o SUPABASE_KEY no configurados en Script Properties');
@@ -1330,6 +1852,130 @@ function _carpetaReportes() {
   return it.hasNext() ? it.next() : DriveApp.createFolder(nombre);
 }
 
+// ── Carpeta en Drive para archivar adjuntos viejos ────────────
+// Organizada por año/mes (a diferencia de _carpetaReportes, que es
+// plana con ~12 archivos/año) porque aquí se espera acumular muchos
+// adjuntos con el tiempo. Se comparte a nivel de dominio (cualquiera
+// con cuenta @colegiogoyavier.edu.co y el link) — ni público, ni
+// restringido solo al dueño de la cuenta de GAS.
+function _carpetaArchivoAdjuntos(ano, mes) {
+  var raizNombre = 'Biblioteca Goyavier - Archivo de Adjuntos';
+  var itRaiz = DriveApp.getFoldersByName(raizNombre);
+  var raiz = itRaiz.hasNext() ? itRaiz.next() : DriveApp.createFolder(raizNombre);
+  try { raiz.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch(e) {}
+
+  var subNombre = ano + '-' + String(mes + 1).padStart(2, '0');
+  var itSub = raiz.getFoldersByName(subNombre);
+  if (itSub.hasNext()) return itSub.next();
+  var sub = raiz.createFolder(subNombre);
+  try { sub.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch(e) {}
+  return sub;
+}
+
+// ── Archiva a Drive y borra de Supabase Storage los adjuntos de
+// solicitudes ya resueltas (entregado/cancelado) de meses anteriores ──
+// El archivo NUNCA se pierde: se descarga de Storage, se sube a Drive,
+// se actualiza bib_documentos (storage_path=null, drive_link=<url>) y
+// solo entonces se borra de Storage — la app ya sabe mostrar
+// "Abrir en Google Drive" cuando storage_path es null y drive_link
+// existe (mismo camino que ya usan los adjuntos compartidos por link
+// de Drive en el correo original, ver _procesarDriveLinks).
+// Corre disparada por verificarFechasMes() (diaria) y también se puede
+// ejecutar manualmente desde Mantenimiento — al ser diaria y basada en
+// storage_path IS NOT NULL, es normal que la mayoría de los días no
+// encuentre nada nuevo que archivar.
+function archivarAdjuntosAntiguos() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return { ok: false, error: 'Faltan credenciales de Supabase' };
+
+  // El trigger diario y el boton manual de Mantenimiento pueden llegar a
+  // coincidir en el tiempo (o dos clics seguidos si la primera vuelta
+  // tarda) -- sin este lock, ambas ejecuciones podrian tomar el mismo
+  // documento a la vez y subirlo dos veces a Drive. Mismo patron que ya
+  // usan sincronizarCorreos/reprocesarCorreo.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(3000)) {
+    return { ok: false, error: 'Ya hay un archivado en curso. Intenta de nuevo en unos segundos.' };
+  }
+  try {
+    var hoy = new Date();
+    var inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
+
+    var docs = sbGet(_url, _key,
+      'bib_documentos?select=id,storage_path,nombre_archivo,bib_solicitudes!inner(fecha_recepcion,estado)' +
+      '&storage_path=not.is.null' +
+      '&bib_solicitudes.estado=in.(entregado,cancelado)' +
+      '&bib_solicitudes.fecha_recepcion=lt.' + inicioMes
+    );
+    if (!Array.isArray(docs)) {
+      _auditar('mantenimiento', 'archivar_adjuntos', 'error', 'error', 'Error consultando bib_documentos: ' + JSON.stringify(docs).substring(0, 300));
+      return { ok: false, error: JSON.stringify(docs) };
+    }
+    if (!docs.length) return { ok: true, archivados: 0, errores: 0, restantes: 0 };
+
+    var t0 = Date.now();
+  // 35s, no 4 minutos: esta funcion tambien se llama desde el boton
+  // manual de Mantenimiento via gasCall(), que se rinde a los 50s del
+  // lado del navegador (ver utils.js). El trigger diario automatico no
+  // tiene ese limite, pero usa la misma funcion -- con un backlog grande
+  // simplemente le toma varios dias ponerse al dia, sin apuro real.
+  var MAX_MS = 35 * 1000;
+  var archivados = 0, errores = 0, procesados = 0;
+
+  for (var i = 0; i < docs.length; i++) {
+    if (Date.now() - t0 > MAX_MS) break;
+    procesados++;
+    var d = docs[i];
+    try {
+      var fecha = new Date(d.bib_solicitudes.fecha_recepcion);
+      var carpeta = _carpetaArchivoAdjuntos(fecha.getFullYear(), fecha.getMonth());
+
+      var encodedPath = d.storage_path.split('/').map(encodeURIComponent).join('/');
+      var resp = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos/' + encodedPath, {
+        headers: { apikey: _key, Authorization: 'Bearer ' + _key },
+        muteHttpExceptions: true
+      });
+      if (resp.getResponseCode() >= 400) throw new Error('Descarga de Storage fallo (' + resp.getResponseCode() + ')');
+
+      var blob = resp.getBlob().setName(d.nombre_archivo || ('archivo_' + d.id));
+      var file = carpeta.createFile(blob);
+
+      var okPatch = sbPatch(_url, _key, 'bib_documentos?id=eq.' + d.id,
+        { storage_path: null, drive_link: file.getUrl() });
+      if (!okPatch) throw new Error('No se pudo actualizar bib_documentos id=' + d.id);
+
+      var delResp = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos', {
+        method: 'DELETE',
+        headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json' },
+        payload: JSON.stringify({ prefixes: [d.storage_path] }),
+        muteHttpExceptions: true
+      });
+      if (delResp.getResponseCode() >= 400) {
+        // El archivo ya quedo respaldado en Drive y bib_documentos ya
+        // apunta ahi -- que sobreviva una copia extra en Storage no es
+        // grave (no se pierde nada), solo no libera espacio todavia.
+        // La proxima reconciliacion lo veria como huerfano_storage
+        // (nada en bib_documentos ya referencia esa ruta) y
+        // limpiarHuerfanosSinDueno lo terminaria de borrar.
+        Logger.log('Archivado OK pero no se borro de Storage id=' + d.id + ': ' + delResp.getContentText());
+      }
+      archivados++;
+    } catch(e) {
+      errores++;
+      Logger.log('Error archivando bib_documentos id=' + d.id + ': ' + e.toString());
+    }
+  }
+
+  var restantes = docs.length - procesados;
+  var hayError = errores > 0;
+  _auditar('mantenimiento', 'archivar_adjuntos', hayError ? 'error' : 'ok', hayError ? 'advertencia' : 'info',
+    archivados + ' archivado(s), ' + errores + ' error(es)' + (restantes > 0 ? ', ' + restantes + ' restante(s) para la próxima ejecución' : ''));
+  return { ok: true, archivados: archivados, errores: errores, restantes: restantes };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ── Alerta email 7 días antes del fin de mes ─────────────────
 function _alertaFinDeMes(dias, fecha) {
   var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
@@ -1388,6 +2034,13 @@ function _notificarError(contexto, msg) {
 }
 
 // ── Helpers públicos de reprocesamiento ──────────────────────
+// IMPORTANTE: estas funciones actualizan la solicitud EN EL MISMO id si ya
+// existe (nunca borran-y-recrean). Borrar antes de confirmar que Gmail va
+// a devolver el mensaje es lo que dejaba solicitudes perdidas para siempre
+// si Gmail fallaba a mitad de camino, y cambiar el id rompía (o en cascada,
+// borraba) los pagos/trabajos/movimientos de Materiales que ya apuntaban a
+// esa solicitud. Comparten el mismo LockService que sincronizarCorreos()
+// para no pisarse si alguien sincroniza desde el navegador al mismo tiempo.
 function reprocesarUltimoCorreo()   { reprocesarUltimosCorreos(1); }
 function reprocesarUltimos3Correos(){ reprocesarUltimosCorreos(3); }
 
@@ -1395,7 +2048,6 @@ function reprocesarUltimosCorreos(n) {
   var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
   var res = sbGet(_url, _key, 'bib_solicitudes?order=fecha_recepcion.desc&limit=' + (n||1) + '&select=id,gmail_message_id,asunto,remitente_email');
   if (!Array.isArray(res) || !res[0]) throw new Error('No hay solicitudes en la base de datos');
-  var lb = _cargarListaBlanca(_url, _key);
   for (var i = 0; i < res.length; i++) {
     Logger.log('--- ' + (i+1) + '/' + res.length + ': ' + res[i].remitente_email + ' | ' + res[i].asunto);
     reprocesarCorreo(res[i].gmail_message_id);
@@ -1405,21 +2057,26 @@ function reprocesarUltimosCorreos(n) {
 
 // Reprocesa UN correo por su gmail_message_id (debe existir o no en Supabase)
 function reprocesarCorreo(gmailMsgId) {
-  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
   if (!gmailMsgId) throw new Error('gmailMsgId requerido');
-  var lb = _cargarListaBlanca(_url, _key);
-  // Borrar registro existente si lo hay
-  var existing = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id');
-  if (Array.isArray(existing) && existing[0]) {
-    var sid = existing[0].id;
-    UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + sid,
-      { method:'DELETE', headers:{apikey:_key, Authorization:'Bearer '+_key, Prefer:'return=minimal'}, muteHttpExceptions:true });
-    UrlFetchApp.fetch(_url + '/rest/v1/bib_solicitudes?id=eq.' + sid,
-      { method:'DELETE', headers:{apikey:_key, Authorization:'Bearer '+_key, Prefer:'return=minimal'}, muteHttpExceptions:true });
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('Ya hay una sincronización en curso. Intenta de nuevo en unos segundos.');
+  try {
+    var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+    var lb = _cargarListaBlanca(_url, _key);
+    // Se busca el mensaje en Gmail ANTES de tocar la base de datos — si no
+    // existe o Gmail falla, no se pierde nada de lo que ya había.
+    var msg = GmailApp.getMessageById(gmailMsgId);
+    if (!msg) throw new Error('Mensaje no encontrado en Gmail: ' + gmailMsgId);
+    var res = _upsertSolicitudDesdeMensaje(msg, _url, _key, lb);
+    _auditar('sincronizacion', 'reprocesar_correo', 'ok', 'advertencia',
+      gmailMsgId + ': ' + res.accion + ' (id=' + res.solId + ')');
+    return res;
+  } catch(e) {
+    _auditar('sincronizacion', 'reprocesar_correo', 'error', 'error', gmailMsgId + ': ' + e.toString());
+    throw e;
+  } finally {
+    lock.releaseLock();
   }
-  var msg = GmailApp.getMessageById(gmailMsgId);
-  if (!msg) throw new Error('Mensaje no encontrado en Gmail: ' + gmailMsgId);
-  return _reprocesarMensaje(msg, _url, _key, lb);
 }
 
 // Atajo sin argumentos para ejecutar desde el editor GAS
@@ -1428,41 +2085,43 @@ function reprocesarDesdeJunio24() { reprocesarDesde('2026/06/23'); }
 // Busca en Gmail desde fechaStr ("2026/06/24") y reprocesa TODOS,
 // incluyendo eliminados e ignorados — usa clasificación correcta via listaBlanca
 function reprocesarDesde(fechaStr) {
-  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
-  var lb = _cargarListaBlanca(_url, _key);
-  var threads = GmailApp.search('-in:sent -in:trash -in:drafts after:' + fechaStr, 0, 100);
-  var procesados = 0, errores = 0;
-  for (var t = 0; t < threads.length; t++) {
-    var msgs = threads[t].getMessages();
-    for (var m = 0; m < msgs.length; m++) {
-      var msg = msgs[m];
-      var msgId = msg.getId();
-      // Filtrar: solo procesar remitentes autorizados
-      var fromMatch = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(msg.getFrom());
-      var fromEmail = fromMatch ? fromMatch[0].toLowerCase() : '';
-      if (!lb[fromEmail]) {
-        Logger.log('OMITIDO (no autorizado): ' + fromEmail + ' | ' + msg.getSubject());
-        continue;
-      }
-      try {
-        // Borrar solicitud existente si la hay
-        var ex = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(msgId) + '&select=id');
-        if (Array.isArray(ex) && ex[0]) {
-          UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + ex[0].id,
-            { method:'DELETE', headers:{apikey:_key, Authorization:'Bearer '+_key, Prefer:'return=minimal'}, muteHttpExceptions:true });
-          UrlFetchApp.fetch(_url + '/rest/v1/bib_solicitudes?id=eq.' + ex[0].id,
-            { method:'DELETE', headers:{apikey:_key, Authorization:'Bearer '+_key, Prefer:'return=minimal'}, muteHttpExceptions:true });
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('Ya hay una sincronización en curso. Intenta de nuevo en unos segundos.');
+  try {
+    var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+    var lb = _cargarListaBlanca(_url, _key);
+    var threads = GmailApp.search('-in:sent -in:trash -in:drafts after:' + fechaStr, 0, 100);
+    var procesados = 0, errores = 0;
+    for (var t = 0; t < threads.length; t++) {
+      var msgs = threads[t].getMessages();
+      for (var m = 0; m < msgs.length; m++) {
+        var msg = msgs[m];
+        var msgId = msg.getId();
+        // Filtrar: solo procesar remitentes autorizados
+        var fromMatch = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(msg.getFrom());
+        var fromEmail = fromMatch ? fromMatch[0].toLowerCase() : '';
+        if (!lb[fromEmail]) {
+          Logger.log('OMITIDO (no autorizado): ' + fromEmail + ' | ' + msg.getSubject());
+          continue;
         }
-        _reprocesarMensaje(msg, _url, _key, lb);
-        procesados++;
-        Logger.log('OK: ' + msg.getFrom() + ' | ' + msg.getSubject());
-      } catch(e) {
-        errores++;
-        Logger.log('ERROR ' + msgId + ': ' + e.message);
+        try {
+          _upsertSolicitudDesdeMensaje(msg, _url, _key, lb);
+          procesados++;
+          Logger.log('OK: ' + msg.getFrom() + ' | ' + msg.getSubject());
+        } catch(e) {
+          errores++;
+          Logger.log('ERROR ' + msgId + ': ' + e.message);
+          _auditar('sincronizacion', 'reprocesar_desde', 'error', 'error', msgId + ': ' + e.toString());
+        }
       }
     }
+    Logger.log('=== reprocesarDesde ' + fechaStr + ': ' + procesados + ' OK, ' + errores + ' errores');
+    _auditar('sincronizacion', 'reprocesar_desde', errores > 0 ? 'error' : 'ok', errores > 0 ? 'advertencia' : 'info',
+      fechaStr + ': ' + procesados + ' OK, ' + errores + ' errores');
+    return { ok: true, procesados: procesados, errores: errores };
+  } finally {
+    lock.releaseLock();
   }
-  Logger.log('=== reprocesarDesde ' + fechaStr + ': ' + procesados + ' OK, ' + errores + ' errores');
 }
 
 // ── Lógica interna compartida ─────────────────────────────────
@@ -1476,43 +2135,100 @@ function _cargarListaBlanca(url, key) {
   return lb;
 }
 
-function _reprocesarMensaje(msg, _url, _key, listaBlanca) {
+// Mismo criterio que sincronizarCorreos(): el primer destinatario del
+// campo To: que no sea la cuenta de la biblioteca (antes _reprocesarMensaje
+// fijaba esto siempre a la cuenta de la biblioteca, un dato incorrecto
+// para todo lo reprocesado).
+function _detectarEmailDestino(msg, emailRemit, emailBiblioteca) {
+  var emailDestino = emailRemit;
+  try {
+    var toList = msg.getTo().split(",");
+    for (var i = 0; i < toList.length; i++) {
+      var addr = toList[i].trim();
+      var am   = addr.match(/<([^>]+)>/);
+      var ae   = am ? am[1].trim().toLowerCase() : addr.toLowerCase();
+      if (ae && ae !== emailBiblioteca) { emailDestino = ae; break; }
+    }
+  } catch(ex2) {}
+  return emailDestino;
+}
+
+// Crea la solicitud si no existe, o la ACTUALIZA en el mismo id si ya
+// existe (nunca borra-y-recrea — ver comentario arriba de reprocesarCorreo).
+function _upsertSolicitudDesdeMensaje(msg, _url, _key, listaBlanca) {
   var MAX_BYTES  = 40 * 1024 * 1024;
   var gmailMsgId = msg.getId();
 
-  // 1. Adjuntos MIME + archivos Drive adjuntos con el botón nativo de Gmail
-  var adjuntos = msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
-  var docs = _procesarAdjuntos(adjuntos, gmailMsgId, MAX_BYTES, _url, _key);
-
-  // 2. Links de Drive en el cuerpo HTML (archivos compartidos como enlace, no adjuntos)
+  // 1. Adjuntos y links de Drive PRIMERO — si Gmail/Drive fallan aquí,
+  //    todavía no se tocó bib_solicitudes ni bib_documentos.
+  var adjuntos   = msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
+  var docs       = _procesarAdjuntos(adjuntos, gmailMsgId, MAX_BYTES, _url, _key);
   var driveLinks = _extraerLinksDrive(msg.getBody());
-  var docsDrive  = _procesarDriveLinks(driveLinks, gmailMsgId, MAX_BYTES, _url, _key);
-  docs = docs.concat(docsDrive);
+  docs = docs.concat(_procesarDriveLinks(driveLinks, gmailMsgId, MAX_BYTES, _url, _key));
 
-  // Clasificar con listaBlanca (igual que sincronizarCorreos)
-  var fromRaw    = msg.getFrom();
-  var emMatch    = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(fromRaw);
-  var emailRemit = emMatch ? emMatch[0].toLowerCase() : fromRaw.toLowerCase();
+  var fromRaw       = msg.getFrom();
+  var emMatch       = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(fromRaw);
+  var emailRemit    = emMatch ? emMatch[0].toLowerCase() : fromRaw.toLowerCase();
   var tipoRemitente = listaBlanca[emailRemit] || 'personal';
+  var emailBib      = Session.getEffectiveUser().getEmail().toLowerCase();
+  var emailDestino  = _detectarEmailDestino(msg, emailRemit, emailBib);
 
-  var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [{
+  var campos = {
     gmail_message_id: gmailMsgId,
     fecha_recepcion:  msg.getDate().toISOString(),
     remitente_nombre: fromRaw,
     remitente_email:  emailRemit,
-    email_destino:    Session.getEffectiveUser().getEmail().toLowerCase(),
+    email_destino:    emailDestino,
     tipo_remitente:   tipoRemitente,
     asunto:           msg.getSubject() || '(sin asunto)',
-    cuerpo:           msg.getPlainBody().substring(0, 1000),
-    estado:           'pendiente'
-  }]);
-  if (!Array.isArray(insertRes) || !insertRes[0]) throw new Error('Error insertando solicitud: ' + JSON.stringify(insertRes));
-  var newSolId = insertRes[0].id;
+    cuerpo:           msg.getPlainBody().substring(0, 1000)
+  };
+
+  var existing = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id');
+  var solId, accion;
+  if (Array.isArray(existing) && existing[0]) {
+    // Actualizar en el mismo id: conserva estado, pagos, trabajos y
+    // movimientos de Materiales que ya apuntan a esta solicitud.
+    solId  = existing[0].id;
+    accion = 'actualizado';
+    var okPatch = sbPatch(_url, _key, 'bib_solicitudes?id=eq.' + solId, campos);
+    if (!okPatch) throw new Error('Error actualizando solicitud id=' + solId);
+    // Los documentos sí se reemplazan (nadie más los referencia por su propio id).
+    // Antes de borrar las filas, borrar TAMBIEN sus archivos en Storage:
+    // borrar solo la fila y dejar el archivo huerfano fue exactamente la
+    // causa de los 558 huerfanos que encontro la reconciliacion (ver
+    // sql/025_recuperar_huerfanos_storage.sql). Se borran los dos o
+    // ninguno, nunca solo uno de los dos lados.
+    var docsViejos = sbGet(_url, _key, 'bib_documentos?solicitud_id=eq.' + solId + '&select=storage_path&storage_path=not.is.null');
+    if (Array.isArray(docsViejos) && docsViejos.length) {
+      var rutasViejas = docsViejos.map(function(d) { return d.storage_path; });
+      var delStorage = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos', {
+        method: 'DELETE',
+        headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json' },
+        payload: JSON.stringify({ prefixes: rutasViejas }),
+        muteHttpExceptions: true
+      });
+      if (delStorage.getResponseCode() >= 400) {
+        _auditar('sincronizacion', 'limpiar_storage_reemplazo', 'error', 'advertencia',
+          'No se pudieron borrar ' + rutasViejas.length + ' archivo(s) viejo(s) de Storage (solicitud id=' + solId + '): ' +
+          delStorage.getContentText().substring(0, 300));
+      }
+    }
+    UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + solId,
+      { method:'DELETE', headers:{apikey:_key, Authorization:'Bearer '+_key, Prefer:'return=minimal'}, muteHttpExceptions:true });
+  } else {
+    accion = 'creado';
+    campos.estado = 'pendiente';
+    var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [campos]);
+    if (!Array.isArray(insertRes) || !insertRes[0]) throw new Error('Error insertando solicitud: ' + JSON.stringify(insertRes));
+    solId = insertRes[0].id;
+  }
+
   if (docs.length) {
     // Normalizar: todas las filas deben tener las mismas claves (PostgREST PGRST102)
     var docRows = docs.map(function(d) {
       return {
-        solicitud_id:   newSolId,
+        solicitud_id:   solId,
         nombre_archivo: d.nombre_archivo || null,
         tipo_mime:      d.tipo_mime      || null,
         tamano_bytes:   d.tamano_bytes   || 0,
@@ -1521,14 +2237,28 @@ function _reprocesarMensaje(msg, _url, _key, listaBlanca) {
       };
     });
     var docRes = sbPostBatch(_url, _key, 'bib_documentos', docRows);
-    if (docRes && docRes.error) {
-      Logger.log('ERROR bib_documentos insert: ' + JSON.stringify(docRes.error));
+    if (!Array.isArray(docRes)) {
+      // Antes esto solo se registraba con Logger.log -- visible unicamente
+      // abriendo el editor de Apps Script y esa ejecucion puntual, nunca
+      // en la app. El archivo ya estaba subido a Storage (paso 1), asi que
+      // un fallo aqui silencioso es exactamente como se generaban huerfanos
+      // al reprocesar. Mismo reintento individual que ya usa _sincronizarCorreosImpl.
+      var _docErr2 = (docRes && docRes.error) ? String(docRes.error) : JSON.stringify(docRes);
+      Logger.log('Batch documentos error: ' + _docErr2 + ' -- reintentando individualmente');
+      var _docsGuardados2 = 0;
+      docRows.forEach(function(fila) {
+        var r = sbPost(_url, _key, 'bib_documentos', fila);
+        if (Array.isArray(r) && r[0]) _docsGuardados2++;
+      });
+      var _docsOk2 = _docsGuardados2 === docRows.length;
+      _auditar('sincronizacion', 'insertar_documentos', _docsOk2 ? 'ok' : 'error', _docsOk2 ? 'advertencia' : 'error',
+        gmailMsgId + ': batch fallo (' + _docErr2.substring(0, 300) + '); reintento individual: ' + _docsGuardados2 + '/' + docRows.length + ' documento(s) guardados');
     } else {
-      Logger.log('Docs insertados: ' + (Array.isArray(docRes) ? docRes.length : '?'));
+      Logger.log('Docs insertados: ' + docRes.length);
     }
   }
-  Logger.log('LISTO: id=' + newSolId + ' tipo=' + tipoRemitente + ' | ' + docs.length + ' archivos');
-  return { ok:true, solId:newSolId, docs:docs.length };
+  Logger.log('LISTO (' + accion + '): id=' + solId + ' tipo=' + tipoRemitente + ' | ' + docs.length + ' archivos');
+  return { ok:true, solId:solId, docs:docs.length, accion:accion };
 }
 
 // ── Sube adjuntos (MIME + Drive) uno por uno a Storage ───────

@@ -113,12 +113,15 @@ async function marcarRecibido(id, btn) {
         if (error) throw error;
         await _sb.from('bib_historial_estados').insert({ solicitud_id:id, estado_anterior:'pendiente', estado_nuevo:'recibido' });
         if (destinatarios.length) {
-          for (const dest of destinatarios) {
+          // En paralelo en vez de un await secuencial por destinatario — con
+          // varios destinatarios (ej. todo un curso) esto evita que la UI
+          // quede bloqueada un tiempo proporcional a la cantidad de gente.
+          Promise.allSettled(destinatarios.map(async dest => {
             const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: dest.email, p_solicitud_id: id });
-            gasCall('enviarCorreo', { tipo:'recibido', destinatario: dest.email,
+            return gasCall('enviarCorreo', { tipo:'recibido', destinatario: dest.email,
               numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
-              asunto: sol.asunto, profesor: sol.profesor }).catch(()=>{});
-          }
+              asunto: sol.asunto, profesor: sol.profesor });
+          })).catch(()=>{});
         }
         toast(`Recibido · ID: ${idRes}`, 'success');
         await cargarSolicitudes();
@@ -384,16 +387,16 @@ async function confirmarImpreso() {
       solicitud_id: _idImpreso, estado_anterior:'recibido', estado_nuevo:'impreso'
     });
 
-    for (let i = 0; i < colabsConArch.length; i++) {
-      const d = colabsConArch[i];
+    // En paralelo por colaborador, no un await secuencial por cada uno.
+    Promise.allSettled(colabsConArch.map(async (d, i) => {
       const r = rows[i];
       const { data: numP } = await _sb.rpc('get_num_solicitud_para_email',
         { p_email: d.email, p_solicitud_id: _idImpreso });
-      gasCall('enviarCorreo', { tipo:'impreso', destinatario: d.email,
+      return gasCall('enviarCorreo', { tipo:'impreso', destinatario: d.email,
         numPersonal: numP||1, idSolicitud: sol.id_solicitud,
         asunto: sol.asunto, profesor: d.nombre,
-        materia: sol.materia, numHojas: r.total_hojas }).catch(()=>{});
-    }
+        materia: sol.materia, numHojas: r.total_hojas });
+    })).catch(()=>{});
 
     toast('Impresión registrada. Correo enviado.', 'success');
     cerrarModal('modal-impreso');
@@ -405,6 +408,11 @@ async function confirmarImpreso() {
 
 // ── Single-select profesor ─────────────────────────────────────
 function initSingleSelect() {
+  // onAuthStateChange llama a esto en cada TOKEN_REFRESHED (aprox. cada hora
+  // de sesión activa), no solo al iniciar sesión — sin esta guarda se
+  // acumula un listener global de click nuevo cada vez.
+  if (_singleSelectInitDone) return;
+  _singleSelectInitDone = true;
   document.addEventListener('click', e => {
     if (!e.target.closest('#ss-wrap')) closeSS();
   });
@@ -539,14 +547,15 @@ async function confirmarEntrega() {
     const destinatarios = sol.destinatarios || [];
     const fechaFmt = new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' });
     if (destinatarios.length) {
-      for (const dest of destinatarios) {
+      // En paralelo por destinatario, no un await secuencial por cada uno.
+      Promise.allSettled(destinatarios.map(async dest => {
         const email  = typeof dest === 'string' ? dest : dest.email;
         const nombre = typeof dest === 'string' ? dest : (dest.nombre || dest.email);
         const trab   = trabajosMap.get(nombre);
         const hojasDest = trab?.total_hojas ?? 0;
         const primerArch = Array.isArray(trab?.archivos) ? trab.archivos[0] : null;
         const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idEntrega });
-        gasCall('enviarCorreo', {
+        return gasCall('enviarCorreo', {
           tipo:'entregado', destinatario: email,
           numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
           solicitudUuid: _idEntrega,
@@ -556,8 +565,8 @@ async function confirmarEntrega() {
           forma: primerArch?.modo_impresion,
           nombreRecibe: nombre,
           fechaEntrega: fechaFmt
-        }).catch(()=>{});
-      }
+        });
+      })).catch(()=>{});
     }
     toast('Entrega registrada. Correo enviado.', 'success');
     cerrarModal('modal-entrega');
@@ -573,11 +582,16 @@ async function verDetalle(id) {
   document.getElementById('md-body').innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   document.getElementById('modal-detalle').classList.add('open');
   try {
+    // Solo las columnas que esta vista realmente pinta (antes select('*,bib_documentos(*)')
+    // traía también cuerpo/campos de notificación no usados aquí y no truncados).
     const [{ data, error }, { data: trabajos }] = await Promise.all([
-      _sb.from('bib_solicitudes').select('*,bib_documentos(*)').eq('id', id).single(),
+      _sb.from('bib_solicitudes')
+        .select('id,id_solicitud,asunto,remitente_email,gmail_message_id,destinatarios,email_destino,estado,fecha_recepcion,cuerpo,tipo_copia,area,observaciones,nombre_recibe,fecha_entrega,recepcion_confirmada,recepcion_confirmada_en,convertido_a_movimiento,bib_documentos(id,nombre_archivo,storage_path,tipo_mime,tamano_bytes,tipo_impresion,forma_impresion,drive_link,num_hojas)')
+        .eq('id', id).single(),
       _sb.from('bib_trabajos_impresion').select('profesor,archivos,total_hojas').eq('solicitud_id', id)
     ]);
     if (error) throw error;
+    _detalleActual = data; // cache: evita inyectar asunto/remitente (pueden traer comillas) en un onclick
     document.getElementById('md-id').textContent = data.id_solicitud || 'Sin ID';
 
     const docs = data.bib_documentos || [];
@@ -656,10 +670,13 @@ async function verDetalle(id) {
       <div class="dr"><span class="dlbl">Notificar a</span><span class="dval">${dests}</span></div>
       <div class="dr"><span class="dlbl">Estado</span><span class="dval">${badge(data.estado)}</span></div>
       <div class="dr"><span class="dlbl">Fecha recepción</span><span class="dval">${fmtFecha(data.fecha_recepcion)}</span></div>
-      ${data.cuerpo?`
+      ${data.gmail_message_id ? `
       <hr class="msep">
-      <div class="msec-hdr" style="margin-bottom:6px">Mensaje original</div>
-      <div style="background:var(--s2);border:1px solid var(--border2);border-radius:7px;padding:12px 14px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:var(--text)">${escHtml(data.cuerpo)}</div>`:''}
+      <div class="msec-hdr" style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center">
+        <span>Mensaje original</span>
+        <button class="btn btn-ghost" style="padding:4px 12px;font-size:12px" onclick="abrirModalResponder()"><i class="fa fa-reply fa-sm"></i> Responder</button>
+      </div>
+      ${data.cuerpo ? `<div style="background:var(--s2);border:1px solid var(--border2);border-radius:7px;padding:12px 14px;font-size:13px;white-space:pre-wrap;line-height:1.6;color:var(--text)">${escHtml(data.cuerpo)}</div>` : `<p style="font-size:12px;color:var(--dim)">Sin texto en el cuerpo del correo</p>`}` : ''}
       <hr class="msep">
       <div class="dr"><span class="dlbl">Tipo</span><span class="dval">${escHtml(data.tipo_copia||'General')}</span></div>
       <div class="dr"><span class="dlbl">Área</span><span class="dval">${data.area||'—'}</span></div>

@@ -15,6 +15,7 @@ let _impresoDestinatarios = []; // destinatarios visibles en el modal de impresi
 let _impresoExpanded = new Set(); // emails de colaboradores expandidos en modal impresión
 let _archivoUrlsMap = new Map(); // docId → { url, nombre } para descargas en modal impresión
 let _entregaSelNames = new Set(); // nombres seleccionados en modal entrega
+let _detalleActual = null; // datos completos de la solicitud abierta en modal-detalle (evita inyectar comillas de asunto/remitente en un onclick)
 
 let _mes = _hoy.getMonth();
 let _ano = _hoy.getFullYear();
@@ -40,6 +41,9 @@ let _confirmarEntregaVentasId = null;
 // Feature 3 — precio automático
 let _precioUnitarioCalculado  = 0;
 let _esCandidatoColab         = false;
+let _ventasColabEmailsCache   = null; // Set de emails de colaboradores, cacheado por sesión
+let _singleSelectInitDone     = false; // initSingleSelect() puede llamarse varias veces (login + cada refresh de token)
+let _personalSolCache        = null; // { remitente_email, remitente_nombre } de la solicitud abierta en modal-personal
 
 // ── ESTADO — módulo materiales y préstamos ────────────────────
 let _matTab            = 'movimientos'; // 'movimientos' | 'catalogo'
@@ -52,7 +56,8 @@ let _movRetornoLineaId  = null;         // movimiento_material_id para "Registra
 let _movDetalleLineas   = [];           // líneas de material del movimiento abierto en el modal de detalle
 let _movDetalleId       = null;         // id del movimiento abierto en el modal de detalle
 let _movSolicitudOrigen = null;         // id de bib_solicitudes cuando el movimiento viene de "Enviar a Materiales"
-let _matBuscarTimer     = null;
+let _matBuscarTimer     = null; // buscador de la lista (Movimientos/Catálogo)
+let _matModalBuscarTimer = null; // buscador de material dentro del modal "Nuevo movimiento" (separado: son inputs distintos)
 
 // ── ESTADO — submódulo libros ──────────────────────────────────
 let _libCache        = [];              // caché de bib_libros para el buscador de títulos
@@ -60,3 +65,7 @@ let _libColabSel     = null;            // colaborador/docente elegido en "Nuevo
 let _libBuscarTimer  = null;
 let _libDetalleId    = null;            // id del préstamo de libro abierto en el modal de detalle
 let _devolverTipo    = 'movimiento';    // 'movimiento' | 'libro' — a qué apunta modal-devolucion
+
+// ── ESTADO — módulo auditoría / centro de salud ────────────────
+let _audTab = 'salud'; // 'salud' (Fase 2) | 'alertas' | 'logs' (Fase 3)
+let _logBuscarTimer = null; // debounce del filtro de usuario en el Visor de Logs

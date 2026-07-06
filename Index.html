@@ -74,6 +74,9 @@
       <div class="ni" data-page="reportes" onclick="navTo('reportes',this)">
         <span class="ic"><i class="fa fa-chart-pie"></i></span> Reportes
       </div>
+      <div class="ni" data-page="auditoria" onclick="navTo('auditoria',this)">
+        <span class="ic"><i class="fa fa-heart-pulse"></i></span> Auditoría
+      </div>
       <div class="ni" data-page="materiales" onclick="navTo('materiales',this)">
         <span class="ic"><i class="fa fa-box-archive"></i></span> Materiales
         <span class="nb" id="nb-materiales" style="display:none">0</span>
@@ -315,6 +318,21 @@
         <div id="mat-content"><div class="loader-wrap"><div class="loader"></div></div></div>
       </div>
 
+      <!-- AUDITORÍA / CENTRO DE SALUD -->
+      <div class="page" id="page-auditoria">
+        <div class="filter-bar">
+          <select class="fc" id="aud-tab-sel" onchange="cambiarTabAuditoria(this.value)" style="width:auto;min-width:170px">
+            <option value="salud">Salud del sistema</option>
+            <option value="alertas">Alertas</option>
+            <option value="logs">Registro de auditoría</option>
+            <option value="diagnostico">Diagnóstico</option>
+            <option value="mantenimiento">Mantenimiento</option>
+          </select>
+          <button class="btn btn-ghost" onclick="actualizarAuditoria()" title="Actualizar"><i class="fa fa-rotate-right fa-sm"></i> Actualizar</button>
+        </div>
+        <div id="aud-content"><div class="loader-wrap"><div class="loader"></div></div></div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -413,6 +431,7 @@
         <div class="mh-mid" id="mp-email"></div>
         <div class="mh-sub" id="mp-asunto"></div>
       </div>
+      <button class="btn btn-ghost" id="mp-btn-responder" style="display:none;padding:5px 12px;font-size:12px;margin-right:6px" onclick="abrirModalResponder()"><i class="fa fa-reply fa-sm"></i> Responder</button>
       <button class="btn-cls" onclick="cerrarModal('modal-personal')"><i class="fa fa-xmark"></i></button>
     </div>
     <div class="mb" style="max-height:72vh;overflow-y:auto">
@@ -761,6 +780,35 @@
       <button class="btn btn-ghost" onclick="cerrarModal('modal-eliminar')">Cancelar</button>
       <button class="btn btn-confirm-red" id="btn-conf-eliminar" onclick="confirmarEliminar()">
         <i class="fa fa-trash-can fa-sm"></i> Eliminar definitivamente
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL RESPONDER (respuesta manual al remitente, mismo hilo de Gmail) -->
+<div class="mo" id="modal-responder">
+  <div class="mc" style="max-width:520px">
+    <div class="mh">
+      <div class="mh-ico blue"><i class="fa fa-reply" style="color:var(--blue)"></i></div>
+      <div class="mh-info">
+        <h3>Responder correo</h3>
+        <div class="mh-sub" id="mresp-asunto" style="color:var(--muted);font-size:12px"></div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-responder')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <div class="dr" style="margin-bottom:14px">
+        <span class="dlbl">Para</span><span class="dval" id="mresp-destinatario"></span>
+      </div>
+      <div class="fgroup">
+        <label>Mensaje</label>
+        <textarea id="mresp-mensaje" class="fc" rows="6" placeholder="Escribe tu respuesta..."></textarea>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-responder')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-conf-responder" onclick="confirmarResponder()">
+        <i class="fa fa-paper-plane fa-sm"></i> Enviar respuesta
       </button>
     </div>
   </div>
@@ -1122,18 +1170,19 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=6"></script>
-<script src="js/state.js?v=7"></script>
-<script src="js/utils.js?v=7"></script>
-<script src="js/auth.js?v=6"></script>
-<script src="js/nav.js?v=7"></script>
-<script src="js/dashboard.js?v=7"></script>
-<script src="js/copias.js?v=7"></script>
-<script src="js/ventas.js?v=7"></script>
-<script src="js/caja.js?v=6"></script>
-<script src="js/notif.js?v=6"></script>
-<script src="js/reportes.js?v=7"></script>
-<script src="js/colaboradores.js?v=8"></script>
-<script src="js/materiales.js?v=1"></script>
-<script src="js/modals.js?v=6"></script>
+<script src="js/state.js?v=9"></script>
+<script src="js/utils.js?v=10"></script>
+<script src="js/auth.js?v=7"></script>
+<script src="js/nav.js?v=10"></script>
+<script src="js/dashboard.js?v=8"></script>
+<script src="js/copias.js?v=8"></script>
+<script src="js/ventas.js?v=8"></script>
+<script src="js/caja.js?v=7"></script>
+<script src="js/notif.js?v=7"></script>
+<script src="js/reportes.js?v=8"></script>
+<script src="js/colaboradores.js?v=9"></script>
+<script src="js/materiales.js?v=2"></script>
+<script src="js/auditoria.js?v=5"></script>
+<script src="js/modals.js?v=10"></script>
 </body>
 </html>
