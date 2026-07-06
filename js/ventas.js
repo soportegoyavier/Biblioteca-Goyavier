@@ -12,12 +12,18 @@ async function cargarVentas() {
       .gte('fecha_recepcion', p1).lt('fecha_recepcion', p2)
       .order('fecha_recepcion', { ascending: false });
     if (buscar) q = q.or(`asunto.ilike.%${buscar}%,remitente_email.ilike.%${buscar}%`);
+    // bib_colaboradores_correos es casi estático — se cachea por sesión en vez
+    // de re-consultarse en cada carga/filtro/tecla del buscador con debounce.
+    const necesitaColabs = !_ventasColabEmailsCache;
     const [{ data, error }, colabRes] = await Promise.all([
       q,
-      _sb.from('bib_colaboradores_correos').select('email')
+      necesitaColabs ? _sb.from('bib_colaboradores_correos').select('email') : Promise.resolve(null)
     ]);
     if (error) throw error;
-    const emailsColab = new Set((colabRes.data || []).map(c => (c.email || '').trim().toLowerCase()));
+    if (necesitaColabs) {
+      _ventasColabEmailsCache = new Set((colabRes.data || []).map(c => (c.email || '').trim().toLowerCase()));
+    }
+    const emailsColab = _ventasColabEmailsCache;
     let rows = data || [];
     if (_filtroVentas === 'cancelado') {
       rows = rows.filter(r => r.estado === 'cancelado');
@@ -140,7 +146,7 @@ async function abrirModalPersonal(solicitudId) {
   try {
     const [solRes, trabRes] = await Promise.all([
       _sb.from('bib_solicitudes')
-        .select('id,id_solicitud,remitente_email,remitente_nombre,asunto,es_manual,bib_documentos(id,nombre_archivo,tipo_mime,storage_path)')
+        .select('id,id_solicitud,remitente_email,remitente_nombre,asunto,es_manual,gmail_message_id,bib_documentos(id,nombre_archivo,tipo_mime,storage_path)')
         .eq('id', solicitudId).single(),
       _sb.from('bib_trabajos_personal')
         .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
@@ -149,6 +155,15 @@ async function abrirModalPersonal(solicitudId) {
     if (solRes.error) throw solRes.error;
     const sol = solRes.data;
     _esManualPersonal = sol.es_manual || false;
+    _personalSolCache = { remitente_email: sol.remitente_email, remitente_nombre: sol.remitente_nombre };
+    // "Responder" solo aplica a correos reales (no a solicitudes manuales, que no tienen hilo de Gmail al que contestar)
+    const btnResponder = document.getElementById('mp-btn-responder');
+    if (!_esManualPersonal && sol.gmail_message_id) {
+      _detalleActual = { remitente_email: sol.remitente_email, asunto: sol.asunto, gmail_message_id: sol.gmail_message_id };
+      btnResponder.style.display = '';
+    } else {
+      btnResponder.style.display = 'none';
+    }
 
     // Check colaborador por email
     if (sol.remitente_email) {
@@ -442,10 +457,9 @@ async function agregarTrabajoPersonal(evt) {
     if (tErr) throw tErr;
 
     if (pagado > 0) {
-      const { data: sol } = await _sb.from('bib_solicitudes').select('remitente_email').eq('id', _idPersonal).single();
       await _sb.from('bib_pagos').insert({
         trabajo_id: trab.id, solicitud_id: _idPersonal,
-        remitente_email: sol?.remitente_email || '', monto: pagado, notas: 'Pago inicial'
+        remitente_email: _personalSolCache?.remitente_email || '', monto: pagado, notas: 'Pago inicial'
       });
     }
 
@@ -465,13 +479,11 @@ async function agregarTrabajoPersonal(evt) {
     }
     toast('Trabajo registrado', 'success');
 
-    const [trabRes, solRes] = await Promise.all([
-      _sb.from('bib_trabajos_personal').select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
-        .eq('solicitud_id', _idPersonal).order('created_at', { ascending: true }),
-      _sb.from('bib_solicitudes').select('remitente_email,remitente_nombre').eq('id', _idPersonal).single()
-    ]);
+    const trabRes = await _sb.from('bib_trabajos_personal')
+      .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
+      .eq('solicitud_id', _idPersonal).order('created_at', { ascending: true });
     if (!_esManualPersonal) renderArchivosPersonal();
-    _renderTrabajosPersonalList(trabRes.data||[], solRes.data?.remitente_email || solRes.data?.remitente_nombre || '');
+    _renderTrabajosPersonalList(trabRes.data||[], _personalSolCache?.remitente_email || _personalSolCache?.remitente_nombre || '');
     if (_pagina === 'ventas') cargarVentas();
   } catch(e) {
     toast('Error al guardar: ' + e.message, 'error');
@@ -506,12 +518,10 @@ async function confirmarAbono() {
     cerrarModal('modal-abono');
     toast('Abono registrado', 'success');
     if (document.getElementById('modal-personal').classList.contains('open')) {
-      const [trabRes, solRes] = await Promise.all([
-        _sb.from('bib_trabajos_personal').select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
-          .eq('solicitud_id', _idPersonal).order('created_at', { ascending: true }),
-        _sb.from('bib_solicitudes').select('remitente_email').eq('id', _idPersonal).single()
-      ]);
-      _renderTrabajosPersonalList(trabRes.data||[], solRes.data?.remitente_email||'');
+      const trabRes = await _sb.from('bib_trabajos_personal')
+        .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
+        .eq('solicitud_id', _idPersonal).order('created_at', { ascending: true });
+      _renderTrabajosPersonalList(trabRes.data||[], _personalSolCache?.remitente_email||'');
     }
     if (_pagina === 'ventas') cargarVentas();
     if (_pagina === 'caja')   cargarCaja();

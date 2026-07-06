@@ -120,32 +120,6 @@ function toggleTema() {
 // Aplicar tema guardado al cargar
 _aplicarTema(localStorage.getItem('bib_tema') || 'light');
 
-// ── LIMPIEZA AUTOMÁTICA DE ARCHIVOS ──────────────────────────
-// Corre una vez por mes al iniciar sesión.
-// Borra de Storage los archivos de solicitudes ya entregadas de meses anteriores.
-async function limpiarArchivosAntiguos() {
-  const key = 'bib_limpieza_' + _hoy.getFullYear() + '_' + _hoy.getMonth();
-  if (localStorage.getItem(key)) return;
-  try {
-    const inicioMes = new Date(_hoy.getFullYear(), _hoy.getMonth(), 1).toISOString();
-    const { data: solic } = await _sb.from('bib_solicitudes')
-      .select('id').eq('estado', 'entregado').lt('fecha_recepcion', inicioMes);
-    if (!solic?.length) { localStorage.setItem(key, '1'); return; }
-    const { data: docs } = await _sb.from('bib_documentos')
-      .select('id, storage_path').in('solicitud_id', solic.map(s => s.id)).not('storage_path', 'is', null);
-    if (!docs?.length) { localStorage.setItem(key, '1'); return; }
-    const paths = docs.map(d => d.storage_path);
-    for (let i = 0; i < paths.length; i += 100) {
-      await _sb.storage.from('biblioteca-adjuntos').remove(paths.slice(i, i + 100));
-    }
-    await _sb.from('bib_documentos').update({ storage_path: null }).in('id', docs.map(d => d.id));
-    localStorage.setItem(key, '1');
-    console.log(`[Biblioteca] Limpieza: ${docs.length} archivo(s) de meses anteriores eliminados`);
-  } catch(e) {
-    console.warn('[Biblioteca] Limpieza automática falló:', e.message);
-  }
-}
-
 // ── MODALES ───────────────────────────────────────────────────
 function cerrarModal(id) { document.getElementById(id).classList.remove('open'); }
 document.addEventListener('keydown', e => {

@@ -120,11 +120,14 @@ function _badgePrestamo(r) {
 }
 
 // ── CATÁLOGO DE MATERIALES ─────────────────────────────────────
-async function renderCatalogoMateriales() {
+async function renderCatalogoMateriales(forzar = false) {
   const el = document.getElementById('mat-content');
   el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   try {
-    await _cargarMatCache();
+    // Respeta la caché al solo navegar a la pestaña (ya la pudo haber
+    // poblado cargarMateriales()); forzar=true garantiza datos frescos
+    // justo después de escribir (agregar/activar/desactivar).
+    if (forzar || !_matCache.length) await _cargarMatCache();
     let rows = _matCache;
     if (_matFiltro) {
       const low = _matFiltro.toLowerCase();
@@ -163,7 +166,7 @@ async function renderCatalogoMateriales() {
 async function toggleMaterialActivo(id, activo) {
   const { error } = await _sb.from('bib_materiales').update({ activo }).eq('id', id);
   if (error) { toast('Error: ' + error.message, 'error'); return; }
-  await renderCatalogoMateriales();
+  await renderCatalogoMateriales(true);
   toast(activo ? 'Material activado' : 'Material desactivado', 'success');
 }
 
@@ -175,7 +178,7 @@ async function agregarMaterialCatalogo() {
   const { error } = await _sb.from('bib_materiales').insert({ nombre, unidad_medida_default: unidadInp?.value?.trim() || null });
   if (error) { toast('Error: ' + error.message, 'error'); return; }
   inp.value = ''; if (unidadInp) unidadInp.value = '';
-  await renderCatalogoMateriales();
+  await renderCatalogoMateriales(true);
   toast('Material agregado', 'success');
 }
 
@@ -247,8 +250,8 @@ function elegirColaboradorMovimiento() {
 }
 
 function matBuscarDebounce() {
-  clearTimeout(_matBuscarTimer);
-  _matBuscarTimer = setTimeout(_renderSugerenciasMaterial, 200);
+  clearTimeout(_matModalBuscarTimer);
+  _matModalBuscarTimer = setTimeout(_renderSugerenciasMaterial, 200);
 }
 
 function _renderSugerenciasMaterial() {
@@ -371,9 +374,14 @@ async function guardarMovimiento() {
       _movSolicitudOrigen = null;
     }
 
+    // Resolver el catálogo primero (secuencial, uno por línea — necesario
+    // para que dos líneas con el mismo material nuevo reutilicen el mismo
+    // id en vez de intentar crearlo dos veces en paralelo), pero insertar
+    // todas las líneas en un solo round-trip en vez de uno por línea.
+    const lineasParaInsertar = [];
     for (const linea of _movMaterialesTemp) {
       const mat = await obtenerOCrearMaterial(linea.nombre, linea.unidad);
-      const { error: eLinea } = await _sb.from('bib_movimiento_materiales').insert({
+      lineasParaInsertar.push({
         movimiento_id: mov.id,
         material_id: mat.id,
         nombre: linea.nombre,
@@ -382,8 +390,9 @@ async function guardarMovimiento() {
         marca: linea.marca, color: linea.color, tamano: linea.tamano,
         presentacion: linea.presentacion,
       });
-      if (eLinea) throw eLinea;
     }
+    const { error: eLineas } = await _sb.from('bib_movimiento_materiales').insert(lineasParaInsertar);
+    if (eLineas) throw eLineas;
 
     await _sb.from('bib_movimientos_historial').insert({
       movimiento_id: mov.id, estado_anterior: null, estado_nuevo: 'entregado',

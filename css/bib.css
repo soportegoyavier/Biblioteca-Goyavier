@@ -461,11 +461,14 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
   /* Materiales, Dashboard (alertas/deudores): aun no tienen vista de
      tarjetas para movil, asi que en vez de ocultarse como el resto de
      tablas .tw, se dejan visibles con scroll horizontal. */
-  #mat-content .tw, #dash-alertas-prestamos .tw, #dash-deudores .tw {
+  #mat-content .tw, #dash-alertas-prestamos .tw, #dash-deudores .tw, #aud-content .tw {
     display:block!important; overflow-x:auto; -webkit-overflow-scrolling:touch;
   }
   #mat-content .tw table, #dash-alertas-prestamos .tw table, #dash-deudores .tw table {
     min-width:520px;
+  }
+  #aud-content .tw table {
+    min-width:760px;
   }
 }
 @media (min-width:769px){

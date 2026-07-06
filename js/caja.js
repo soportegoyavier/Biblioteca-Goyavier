@@ -85,17 +85,17 @@ async function cargarCaja() {
           </div>`).join('')}</div>`:''}`;
 
     } else if (_cajaTab === 'deudas') {
-      const { data: trabajos, error } = await _sb.from('bib_trabajos_personal')
-        .select('id,nombre,precio_total,valor_pagado,solicitud_id,bib_solicitudes(remitente_email)').gt('precio_total',0);
+      // bib_vista_deudas_detalle ya filtra solo trabajos con saldo > 0.01
+      // (antes se traía toda bib_trabajos_personal con precio_total>0 y se
+      // filtraba/agregaba en el cliente, sin ningún límite de tamaño).
+      const { data: trabajos, error } = await _sb.from('bib_vista_deudas_detalle').select('*');
       if (error) throw error;
       const deudas = {};
       (trabajos||[]).forEach(t => {
-        const saldo = (t.precio_total||0)-(t.valor_pagado||0);
-        if (saldo < 0.01) return;
-        const email = t.bib_solicitudes?.remitente_email||'—';
+        const email = t.remitente_email||'—';
         if (!deudas[email]) deudas[email] = { email, total:0, items:[] };
-        deudas[email].total += saldo;
-        deudas[email].items.push({ nombre:t.nombre, saldo, tid:t.id, sid:t.solicitud_id });
+        deudas[email].total += t.saldo;
+        deudas[email].items.push({ nombre:t.nombre, saldo:t.saldo, tid:t.id, sid:t.solicitud_id });
       });
       const lista = Object.values(deudas).sort((a,b)=>b.total-a.total);
       if (!lista.length) { el.innerHTML=`<div class="empty"><div class="eico"><i class="fa fa-circle-check"></i></div><p>Sin deudas pendientes</p></div>`; return; }

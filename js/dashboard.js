@@ -12,7 +12,8 @@ async function cargarDashboard() {
       _sb.from('bib_solicitudes').select('estado').in('estado', ['recibido','impreso']),
       _sb.from('bib_solicitudes').select('id,id_solicitud,fecha_recepcion,asunto,remitente_email,profesor,estado')
         .order('fecha_recepcion', { ascending: false }).limit(8),
-      _sb.from('bib_documentos').select('solicitud_id,num_hojas')
+      _sb.from('bib_documentos').select('solicitud_id,num_hojas,bib_solicitudes!inner(fecha_recepcion)')
+        .gte('bib_solicitudes.fecha_recepcion', p1).lt('bib_solicitudes.fecha_recepcion', p2)
     ]), 12000, 'Sin respuesta de la base de datos (12s). Verifica tu conexión a internet.');
 
     if (r1.error) throw new Error('solicitudes-mes: ' + r1.error.message);
@@ -24,11 +25,8 @@ async function cargarDashboard() {
 
     const mesEnt = (r1.data||[]).filter(s => s.estado==='entregado').length;
 
-    // Hojas del mes: solo docs de solicitudes del mes
-    const mesSolAllIds = new Set((r1.data||[]).map(s => s.id));
-    const mesHojas = (r4.data||[])
-      .filter(d => mesSolAllIds.has(d.solicitud_id))
-      .reduce((a,d) => a+(d.num_hojas||0), 0);
+    // Hojas del mes: r4 ya viene filtrado por fecha_recepcion vía el join
+    const mesHojas = (r4.data||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
 
     document.getElementById('st-imprimir').textContent = cnt.recibido;
     document.getElementById('st-entregar').textContent = cnt.impreso;
@@ -44,36 +42,27 @@ async function cargarDashboard() {
   cargarDeudores();         // idem
 }
 
-// ── DEUDORES (Ventas) — misma agregación que Caja → Deudas ────
+// ── DEUDORES (Ventas) — misma vista agregada que usa Caja → Deudas ──
 async function cargarDeudores() {
   const el = document.getElementById('dash-deudores');
   if (!el) return;
   el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   try {
-    const { data: trabajos, error } = await _sb.from('bib_trabajos_personal')
-      .select('id,nombre,precio_total,valor_pagado,solicitud_id,bib_solicitudes(remitente_email)').gt('precio_total', 0);
+    // bib_vista_deudas ya agrega en la base de datos (saldo > 0 por remitente),
+    // en vez de traer todo bib_trabajos_personal y sumar en el cliente.
+    const { data: lista, error } = await _sb.from('bib_vista_deudas').select('*');
     if (error) throw error;
-
-    const deudas = {};
-    (trabajos||[]).forEach(t => {
-      const saldo = (t.precio_total||0) - (t.valor_pagado||0);
-      if (saldo < 0.01) return;
-      const email = t.bib_solicitudes?.remitente_email || '—';
-      if (!deudas[email]) deudas[email] = { email, total: 0 };
-      deudas[email].total += saldo;
-    });
-    const lista = Object.values(deudas).sort((a,b) => b.total - a.total);
 
     if (!lista.length) {
       el.innerHTML = '<div class="empty"><div class="eico"><i class="fa fa-circle-check"></i></div><p>Sin deudas pendientes</p></div>';
       return;
     }
-    const totDeuda = lista.reduce((a,d) => a + d.total, 0);
+    const totDeuda = lista.reduce((a,d) => a + d.saldo_pendiente, 0);
     el.innerHTML = `<div class="tw"><table>
       <thead><tr><th>Remitente</th><th>Saldo pendiente</th></tr></thead>
       <tbody>${lista.slice(0, 8).map(d => `<tr onclick="irACajaDeudas()" style="cursor:pointer">
-        <td>${escHtml(d.email)}</td>
-        <td style="color:var(--red);font-weight:700">${fmtPesos(d.total)}</td>
+        <td>${escHtml(d.remitente_email)}</td>
+        <td style="color:var(--red);font-weight:700">${fmtPesos(d.saldo_pendiente)}</td>
       </tr>`).join('')}</tbody>
     </table></div>
     <div style="text-align:right;font-size:12px;color:var(--muted);margin-top:6px">

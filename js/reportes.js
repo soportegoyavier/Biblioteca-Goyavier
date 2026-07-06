@@ -7,7 +7,7 @@ async function cargarReportes() {
     const ini  = new Date(ano, mes, 1).toISOString();
     const fin  = new Date(ano, mes + 1, 1).toISOString();
     const inia = new Date(ano, 0, 1).toISOString();
-    const [{ data: mesD }, { data: anoD }, { data: topD }, { data: tipoMesD }, { data: tipoAnoD }] = await Promise.all([
+    const [{ data: mesD }, { data: anoD }, { data: topD }, { data: tipoMesD }, { data: tipoAnoD }, { data: destD }] = await Promise.all([
       _sb.from('bib_documentos').select('num_hojas,tipo_impresion,forma_impresion,bib_solicitudes!inner(fecha_recepcion)')
         .gte('bib_solicitudes.fecha_recepcion', ini).lt('bib_solicitudes.fecha_recepcion', fin),
       _sb.from('bib_documentos').select('num_hojas,tipo_impresion,forma_impresion,bib_solicitudes!inner(fecha_recepcion)')
@@ -17,9 +17,9 @@ async function cargarReportes() {
       _sb.from('bib_solicitudes').select('tipo_copia,bib_documentos(num_hojas)')
         .gte('fecha_recepcion', ini).lt('fecha_recepcion', fin).neq('estado', 'cancelado'),
       _sb.from('bib_solicitudes').select('tipo_copia,bib_documentos(num_hojas)')
-        .gte('fecha_recepcion', inia).neq('estado', 'cancelado')
+        .gte('fecha_recepcion', inia).neq('estado', 'cancelado'),
+      _sb.from('bib_solicitudes').select('email_destino').gte('fecha_recepcion', inia)
     ]);
-    const { data: destD } = await _sb.from('bib_solicitudes').select('email_destino').gte('fecha_recepcion', inia);
     function agg(rows) {
       let total=0,bn=0,color=0,una=0,doble=0;
       (rows||[]).forEach(d => {
@@ -134,11 +134,14 @@ async function cargarStatsMateriales() {
       _sb.from('bib_movimientos').select('tipo,fecha_devolucion_real,fecha_limite_devolucion,colaborador_nombre').gte('created_at', ini).lt('created_at', fin),
       _sb.from('bib_movimiento_materiales').select('nombre,cantidad_entregada,bib_movimientos!inner(created_at)').gte('bib_movimientos.created_at', ini).lt('bib_movimientos.created_at', fin),
       _sb.from('bib_prestamos_libros').select('libro_titulo,tipo_prestatario').gte('fecha_prestamo', ini).lt('fecha_prestamo', fin),
-      _sb.from('bib_prestamos_libros').select('es_institucional,fecha_devolucion_real'),
+      // Solo institucionales activos (no todo el histórico) — el conteo ya se filtra en la DB
+      _sb.from('bib_prestamos_libros').select('id', { count: 'exact', head: true })
+        .eq('es_institucional', true).is('fecha_devolucion_real', null),
     ]);
     if (movMes.error)    throw movMes.error;
     if (lineasMes.error) throw lineasMes.error;
     if (libMes.error)    throw libMes.error;
+    if (libTodos.error)  throw libTodos.error;
 
     const hoy = new Date(); hoy.setHours(0,0,0,0);
     function estadoPrestamo(r) {
@@ -176,7 +179,7 @@ async function cargarStatsMateriales() {
     (libMes.data||[]).forEach(l => { libTop[l.libro_titulo] = (libTop[l.libro_titulo]||0) + 1; });
     const libTopArr = Object.entries(libTop).sort((a,b) => b[1]-a[1]).slice(0, 8);
     const maxLibTop = libTopArr[0]?.[1] || 1;
-    const libInstActivos = (libTodos.data||[]).filter(l => l.es_institucional && !l.fecha_devolucion_real).length;
+    const libInstActivos = libTodos.count || 0;
 
     el.innerHTML = `
       <div class="rep-grid">
@@ -704,5 +707,38 @@ async function exportarExcelMateriales() {
 
     _xDl(`Biblioteca_Materiales_${nom}_${ano}.xls`, [s1, s2, s3]);
     toast('Excel de materiales descargado.', 'success');
+  } catch(e) { toast('Error al generar Excel: ' + e.message, 'error'); }
+}
+
+// ── EXCEL AUDITORÍA (Fase 3) ───────────────────────────────────
+// Exporta lo que _obtenerFilasLogs() ya trae con los filtros puestos
+// en el Visor de Logs (auditoria.js) — no vuelve a pedir fecha/módulo/
+// gravedad aquí, respeta lo que el usuario ya filtró en pantalla.
+async function exportarExcelAuditoria() {
+  toast('Generando Excel de auditoría...', 'info');
+  try {
+    const filas = await _obtenerFilasLogs(5000);
+    if (!filas.length) { toast('No hay registros para exportar con estos filtros.', 'info'); return; }
+
+    const H = ['Fecha','Usuario','Origen','Módulo','Acción','Tabla','Registro','Resultado','Gravedad','Detalle'];
+    const N = H.length;
+    const gSid = { info:'def', advertencia:'pend', error:'canc', critico:'canc' };
+    const rows = [];
+    rows.push(_xHdr('BIBLIOTECA GOYAVIER — Registro de Auditoría', 'tit', N));
+    rows.push(_xHdr(`Generado: ${_xFecha(new Date().toISOString())} · ${filas.length} registro(s)`, 'per', N));
+    rows.push(_xRow(H.map(h => _xC(h,'String','ch')), 20));
+    filas.forEach(f => {
+      const sid = f.resultado === 'error' ? 'canc' : 'entr';
+      rows.push(_xRow([
+        _xC(_xFecha(f.ocurrido_en),'String',sid), _xC(f.usuario||'','String',sid), _xC(f.origen,'String',sid),
+        _xC(f.modulo,'String',sid), _xC(f.accion,'String',sid), _xC(f.tabla||'','String',sid),
+        _xC(f.registro_id||'','String',sid), _xC(f.resultado,'String',sid),
+        _xC(f.gravedad,'String', gSid[f.gravedad] || sid), _xC(f.detalle||'','String','wrap'),
+      ], 18));
+    });
+    const sheet = _xSheet('Auditoria', [130,160,70,150,110,150,90,80,90,340], rows);
+
+    _xDl(`Biblioteca_Auditoria_${new Date().toISOString().slice(0,10)}.xls`, [sheet]);
+    toast('Excel de auditoría descargado.', 'success');
   } catch(e) { toast('Error al generar Excel: ' + e.message, 'error'); }
 }

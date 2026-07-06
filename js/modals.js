@@ -70,28 +70,13 @@ async function confirmarEliminar() {
   const btn    = document.getElementById('btn-conf-eliminar');
   btn.classList.add('loading'); btn.disabled = true;
   try {
-    // Obtener gmail_message_id, remitente y asunto antes de borrar
-    const { data: sol, error: eGet } = await _sb.from('bib_solicitudes')
-      .select('gmail_message_id,remitente_email,asunto')
-      .eq('id', _eliminarId).single();
-    if (eGet) throw eGet;
-
-    // Registrar en lista de ignorados para que no se reimporte
-    if (sol.gmail_message_id) {
-      await _sb.from('bib_mensajes_ignorados').upsert({
-        gmail_message_id: sol.gmail_message_id,
-        remitente_email:  sol.remitente_email || null,
-        asunto:           sol.asunto          || null,
-        motivo:           motivo              || null
-      }, { onConflict: 'gmail_message_id' });
-    }
-
-    // bib_pagos.solicitud_id no tiene ON DELETE CASCADE — borrar pagos explícitamente primero
-    await _sb.from('bib_pagos').delete().eq('solicitud_id', _eliminarId);
-
-    // Eliminar solicitud (cascade borra documentos, trabajos_personal e historial)
-    const { error: eDel } = await _sb.from('bib_solicitudes').delete().eq('id', _eliminarId);
-    if (eDel) throw eDel;
+    // Todo el borrado (Storage + pagos + solicitud + registrar en
+    // ignorados) se hace en el servidor con la service_role key — el
+    // navegador intentaba borrar los archivos de Storage directo y no
+    // funcionaba de verdad (sin error visible, pero el archivo se
+    // quedaba huérfano). Ver _eliminarSolicitud() en WebApp_Backend.gs.
+    const res = await gasCall('eliminarSolicitud', { id: _eliminarId, motivo });
+    if (!res.ok) throw new Error(res.error || 'Error desconocido');
 
     toast('Correo eliminado y bloqueado', 'success');
     cerrarModal('modal-eliminar');
@@ -101,6 +86,37 @@ async function confirmarEliminar() {
       await cargarSolicitudes();
       await actualizarBadges();
     }
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.classList.remove('loading'); btn.disabled = false;
+  }
+}
+
+// ── RESPONDER CORREO ──────────────────────────────────────────
+// Respuesta manual, no automática: el usuario decide qué escribir y
+// cuándo. Se envía como reply real de Gmail (mismo hilo) en vez de un
+// correo nuevo, para que el remitente lo vea como una respuesta normal.
+function abrirModalResponder() {
+  if (!_detalleActual) return;
+  document.getElementById('mresp-destinatario').textContent = _detalleActual.remitente_email || '—';
+  document.getElementById('mresp-asunto').textContent = 'Re: ' + (_detalleActual.asunto || '(sin asunto)');
+  document.getElementById('mresp-mensaje').value = '';
+  document.body.appendChild(document.getElementById('modal-responder'));
+  document.getElementById('modal-responder').classList.add('open');
+}
+
+async function confirmarResponder() {
+  if (!_detalleActual) return;
+  const mensaje = document.getElementById('mresp-mensaje').value.trim();
+  if (!mensaje) { toast('Escribe un mensaje', 'error'); return; }
+  const btn = document.getElementById('btn-conf-responder');
+  btn.classList.add('loading'); btn.disabled = true;
+  try {
+    const res = await gasCall('responderCorreo', { gmailMessageId: _detalleActual.gmail_message_id, mensaje });
+    if (!res.ok) throw new Error(res.error || 'Error desconocido');
+    toast('Respuesta enviada', 'success');
+    cerrarModal('modal-responder');
   } catch(e) {
     toast('Error: ' + e.message, 'error');
   } finally {

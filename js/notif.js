@@ -47,7 +47,10 @@ async function cargarNotificaciones() {
     const [nRes, rRes, sRes] = await Promise.all([
       _sb.from('bib_notif_config').select('email,activas'),
       _sb.from('bib_remitentes_autorizados').select('email,tipo').eq('activo', true),
-      _sb.from('bib_solicitudes').select('remitente_email,tipo_remitente').limit(500)
+      // Vista con un remitente distinto por email (el más reciente), sin límite
+      // arbitrario — antes .limit(500) sin order podía dejar remitentes reales
+      // fuera de la lista según el orden físico de la tabla.
+      _sb.from('bib_vista_remitentes_historicos').select('remitente_email,tipo_remitente')
     ]);
     const configs = {};
     (nRes.data||[]).forEach(n => configs[n.email] = n.activas);

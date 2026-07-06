@@ -165,6 +165,7 @@ async function guardarColaborador() {
     toast(_editColabId ? 'Colaborador actualizado' : 'Colaborador creado', 'success');
     cerrarModal('modal-colab');
     _pickerColabs = []; // invalidar caché picker
+    _ventasColabEmailsCache = null; // invalidar caché de emails de Ventas (pudo cambiar un correo)
     await cargarColaboradores();
   } catch(e) {
     toast('Error: ' + e.message, 'error');
