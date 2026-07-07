@@ -189,6 +189,7 @@
           <button class="fb" onclick="setFiltro('pendiente',this)"><i class="fa fa-inbox fa-sm"></i> Pendiente</button>
           <button class="fb" onclick="setFiltro('recibido',this)"><i class="fa fa-clock fa-sm"></i> Recibido</button>
           <button class="fb" onclick="setFiltro('impreso',this)"><i class="fa fa-print fa-sm"></i> Impreso</button>
+          <button class="fb" onclick="setFiltro('entregado_parcial',this)"><i class="fa fa-box-open fa-sm"></i> Entrega parcial</button>
           <button class="fb" onclick="setFiltro('entregado',this)"><i class="fa fa-circle-check fa-sm"></i> Entregado</button>
           <button class="fb" onclick="setFiltro('cancelado',this)"><i class="fa fa-ban fa-sm"></i> Canceladas</button>
           <div class="search-wrap">
@@ -393,7 +394,6 @@
       <div class="fgroup">
         <label>Quien recibe el material? <span class="req">*</span></label>
         <input type="text" id="me-recibe" class="fc" placeholder="Nombre completo">
-        <div id="me-sugeridos" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
       </div>
     </div>
     <div class="mf">
@@ -562,7 +562,7 @@
               <input type="radio" name="mp-toner" value="ahorro" checked onchange="recalcPrecioPersonal()"> Ahorro de toner
             </label>
             <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
-              <input type="radio" name="mp-toner" value="full" onchange="recalcPrecioPersonal()"> Full toner (+$500/hoja)
+              <input type="radio" name="mp-toner" value="full" onchange="recalcPrecioPersonal()"> Full toner (+$500/página)
             </label>
           </div>
         </div>
@@ -577,7 +577,7 @@
       </div>
       <!-- Badge de colaborador -->
       <div id="mp-colab-badge" style="display:none;margin-bottom:8px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
-        <i class="fa fa-tag fa-xs"></i> Precio colaborador activo ($200/hoja B&amp;N)
+        <i class="fa fa-tag fa-xs"></i> Precio colaborador activo ($200/página B&amp;N)
       </div>
 
       <input type="hidden" id="mp-precio" value="0">
@@ -632,7 +632,7 @@
         <label>Email <span style="color:var(--muted);font-size:11px">(opcional — para enviar confirmación)</span></label>
         <input type="email" id="mnm-email" class="fc" placeholder="correo@ejemplo.com" oninput="onMnmEmailChange()">
         <div id="mnm-colab-badge" style="display:none;margin-top:5px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
-          <i class="fa fa-tag fa-xs"></i> Es colaborador — precio B&amp;N $200/hoja
+          <i class="fa fa-tag fa-xs"></i> Es colaborador — precio B&amp;N $200/página
         </div>
       </div>
       <div class="fgroup">
@@ -1170,13 +1170,13 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=6"></script>
-<script src="js/state.js?v=9"></script>
-<script src="js/utils.js?v=10"></script>
+<script src="js/state.js?v=10"></script>
+<script src="js/utils.js?v=11"></script>
 <script src="js/auth.js?v=7"></script>
 <script src="js/nav.js?v=10"></script>
 <script src="js/dashboard.js?v=8"></script>
-<script src="js/copias.js?v=8"></script>
-<script src="js/ventas.js?v=8"></script>
+<script src="js/copias.js?v=9"></script>
+<script src="js/ventas.js?v=9"></script>
 <script src="js/caja.js?v=7"></script>
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>

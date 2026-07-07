@@ -65,7 +65,7 @@ function accionHTML(r) {
   const canBtn = `<button class="btn btn-danger-sm" style="margin-left:4px" onclick="abrirModalCancelar(${r.id},'copias')" title="Cancelar"><i class="fa fa-ban fa-xs"></i></button>`;
   if (r.estado === 'pendiente') return `<button class="btn btn-na" onclick="marcarRecibido(${r.id},this)"><i class="fa fa-check fa-sm"></i> Recibir</button>${canBtn}`;
   if (r.estado === 'recibido')  return `<button class="btn btn-nb" onclick="abrirModalImpreso(${r.id})"><i class="fa fa-print fa-sm"></i> Imprimir</button>${canBtn}`;
-  if (r.estado === 'impreso')   return `<button class="btn btn-nc" onclick="abrirModalEntrega(${r.id})"><i class="fa fa-box-open fa-sm"></i> Entregar</button>${canBtn}`;
+  if (['impreso','entregado_parcial'].includes(r.estado)) return `<button class="btn btn-nc" onclick="verDetalle(${r.id})"><i class="fa fa-box-open fa-sm"></i> Ver entregas</button>${canBtn}`;
   return '<span class="td-m">—</span>';
 }
 
@@ -92,7 +92,7 @@ function renderCards(rows) {
       <div class="sol-card-footer">
         ${r.estado==='pendiente'?`<button class="btn btn-na" onclick="marcarRecibido(${r.id},this)"><i class="fa fa-check fa-sm"></i> Recibir</button>`:''}
         ${r.estado==='recibido' ?`<button class="btn btn-nb" onclick="abrirModalImpreso(${r.id})"><i class="fa fa-print fa-sm"></i> Imprimir</button>`:''}
-        ${r.estado==='impreso'  ?`<button class="btn btn-nc" onclick="abrirModalEntrega(${r.id})"><i class="fa fa-box-open fa-sm"></i> Entregar</button>`:''}
+        ${['impreso','entregado_parcial'].includes(r.estado)?`<button class="btn btn-nc" onclick="verDetalle(${r.id})"><i class="fa fa-box-open fa-sm"></i> Ver entregas</button>`:''}
         ${['pendiente','recibido','impreso'].includes(r.estado)?`<button class="btn btn-danger-sm" onclick="abrirModalCancelar(${r.id},'copias')"><i class="fa fa-ban fa-xs"></i></button>`:''}
         <button class="btn btn-danger" onclick="abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>
         <button class="btn btn-detail" onclick="verDetalle(${r.id})"><i class="fa fa-eye fa-sm"></i> Detalle</button>
@@ -359,7 +359,7 @@ async function confirmarImpreso() {
         tipo_impresion: a.tipo_impresion, modo_impresion: a.modo_impresion,
         tamano_hoja: a.tamano_hoja, tipo_papel: a.tipo_papel||'Bond', total_hojas: calcHojas(a)
       }));
-      return { solicitud_id: _idImpreso, nombre, profesor: d.nombre,
+      return { solicitud_id: _idImpreso, nombre, profesor: d.nombre, destinatario_email: d.email||null,
         archivos, total_hojas: archivos.reduce((s, a) => s + a.total_hojas, 0), observaciones: null };
     });
 
@@ -472,57 +472,32 @@ function resetSSDisplay() {
   closeSS();
 }
 
-// ── MODAL ENTREGA ─────────────────────────────────────────────
-async function abrirModalEntrega(id) {
-  _idEntrega = id;
+// ── MODAL ENTREGA (por trabajo/destinatario, no por solicitud completa) ──
+async function abrirModalEntrega(trabajoId) {
+  _idEntrega = trabajoId;
   document.getElementById('me-recibe').value = '';
   document.getElementById('me-id').textContent = 'Cargando...';
   document.getElementById('me-asunto').textContent = '';
   document.getElementById('me-info').innerHTML = '';
-  const sugerEl = document.getElementById('me-sugeridos');
-  if (sugerEl) sugerEl.innerHTML = '';
   document.getElementById('modal-entrega').classList.add('open');
   try {
-    const { data, error } = await _sb.from('bib_solicitudes')
-      .select('id_solicitud,asunto,email_destino,remitente_email,remitente_nombre,profesor,materia,destinatarios,bib_documentos(num_hojas,tipo_impresion,forma_impresion)')
-      .eq('id', id).single();
+    const { data, error } = await _sb.from('bib_trabajos_impresion')
+      .select('id,profesor,destinatario_email,archivos,total_hojas,solicitud_id,bib_solicitudes(id_solicitud,asunto,materia)')
+      .eq('id', trabajoId).single();
     if (error) throw error;
-    document.getElementById('me-id').textContent = data.id_solicitud || 'Sin ID';
-    document.getElementById('me-asunto').textContent = data.asunto || '';
+    const sol = data.bib_solicitudes || {};
+    document.getElementById('me-id').textContent = sol.id_solicitud || 'Sin ID';
+    document.getElementById('me-asunto').textContent = sol.asunto || '';
+    document.getElementById('me-recibe').value = data.profesor || '';
 
-    // Pre-llenar con todos los destinatarios de impresión (no el remitente)
-    const dests = Array.isArray(data.destinatarios) && data.destinatarios.length ? data.destinatarios : [];
-    const destNombres = dests.map(d => typeof d === 'string' ? d : (d.nombre || d.email));
-    _entregaSelNames = new Set(destNombres);
-    document.getElementById('me-recibe').value = destNombres.join(', ');
-
-    // Chips multi-selección para cada destinatario
-    if (sugerEl && destNombres.length) {
-      sugerEl.innerHTML = destNombres.map(nom =>
-        `<button type="button" class="chip-suger chip-suger-on"
-          onclick="toggleEntregaChip('${nom.replace(/'/g,"\\'")}',this)">${escHtml(nom)}</button>`
-      ).join('');
-    }
-
-    const hojas = (data.bib_documentos||[]).reduce((a,d) => a+(d.num_hojas||0), 0);
-    const tipo  = data.bib_documentos?.[0]?.tipo_impresion || '—';
-    const forma = data.bib_documentos?.[0]?.forma_impresion || '—';
+    const arch  = Array.isArray(data.archivos) ? data.archivos : [];
+    const tipo  = arch[0]?.tipo_impresion || '—';
+    const forma = arch[0]?.modo_impresion || '—';
     document.getElementById('me-info').innerHTML =
-      `<strong>${data.asunto||'Sin asunto'}</strong><br>
-       Profesor: ${data.profesor||'—'} · Materia: ${data.materia||'—'}<br>
-       ${hojas} hojas · ${tipo} · ${forma}`;
+      `<strong>${sol.asunto||'Sin asunto'}</strong><br>
+       Para: ${data.profesor||'—'} · Materia: ${sol.materia||'—'}<br>
+       ${data.total_hojas||0} hojas · ${arch.length} archivo${arch.length!==1?'s':''} · ${tipo} · ${forma}`;
   } catch(e) { toast('Error: ' + e.message, 'error'); }
-}
-
-function toggleEntregaChip(nom, btn) {
-  if (_entregaSelNames.has(nom)) {
-    _entregaSelNames.delete(nom);
-    btn.classList.remove('chip-suger-on');
-  } else {
-    _entregaSelNames.add(nom);
-    btn.classList.add('chip-suger-on');
-  }
-  document.getElementById('me-recibe').value = Array.from(_entregaSelNames).join(', ');
 }
 
 async function confirmarEntrega() {
@@ -533,44 +508,30 @@ async function confirmarEntrega() {
   btn.classList.add('loading'); btn.disabled = true;
   try {
     const ahora = new Date().toISOString();
-    const { data: sol, error } = await _sb.from('bib_solicitudes')
-      .update({ estado:'entregado', nombre_recibe: recibe, fecha_entrega: ahora, notif_entregado_en: ahora })
+    const { data: trab, error } = await _sb.from('bib_trabajos_impresion')
+      .update({ estado:'entregado', nombre_recibe: recibe, fecha_entrega: ahora })
       .eq('id', _idEntrega)
-      .select('id_solicitud,asunto,profesor,materia,destinatarios,bib_documentos(num_hojas,tipo_impresion,forma_impresion)').single();
+      .select('id,profesor,destinatario_email,archivos,total_hojas,solicitud_id,bib_solicitudes(id_solicitud,asunto,materia)').single();
     if (error) throw error;
-    await _sb.from('bib_historial_estados').insert({ solicitud_id:_idEntrega, estado_anterior:'impreso', estado_nuevo:'entregado' });
+    await _sb.from('bib_historial_estados').insert({ solicitud_id: trab.solicitud_id, estado_anterior:'impreso', estado_nuevo:'entregado' });
 
-    const { data: trabajos } = await _sb.from('bib_trabajos_impresion')
-      .select('profesor,archivos,total_hojas').eq('solicitud_id', _idEntrega);
-    const trabajosMap = new Map((trabajos||[]).map(t => [t.profesor, t]));
-
-    const destinatarios = sol.destinatarios || [];
+    const sol = trab.bib_solicitudes || {};
     const fechaFmt = new Date(ahora).toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' });
-    if (destinatarios.length) {
-      // En paralelo por destinatario, no un await secuencial por cada uno.
-      Promise.allSettled(destinatarios.map(async dest => {
-        const email  = typeof dest === 'string' ? dest : dest.email;
-        const nombre = typeof dest === 'string' ? dest : (dest.nombre || dest.email);
-        const trab   = trabajosMap.get(nombre);
-        const hojasDest = trab?.total_hojas ?? 0;
-        const primerArch = Array.isArray(trab?.archivos) ? trab.archivos[0] : null;
-        const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: email, p_solicitud_id: _idEntrega });
-        return gasCall('enviarCorreo', {
-          tipo:'entregado', destinatario: email,
-          numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
-          solicitudUuid: _idEntrega,
-          asunto: sol.asunto, profesor: nombre,
-          materia: sol.materia, numHojas: hojasDest,
-          tipoImpresion: primerArch?.tipo_impresion,
-          forma: primerArch?.modo_impresion,
-          nombreRecibe: nombre,
-          fechaEntrega: fechaFmt
-        });
-      })).catch(()=>{});
+    if (trab.destinatario_email) {
+      const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: trab.destinatario_email, p_solicitud_id: trab.solicitud_id });
+      gasCall('enviarCorreo', {
+        tipo:'entregado', destinatario: trab.destinatario_email,
+        numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
+        trabajoId: trab.id,
+        asunto: sol.asunto, profesor: trab.profesor,
+        materia: sol.materia, archivos: trab.archivos,
+        nombreRecibe: recibe, fechaEntrega: fechaFmt
+      }).catch(()=>{});
     }
-    toast('Entrega registrada. Correo enviado.', 'success');
+    toast('Entrega registrada' + (trab.destinatario_email ? '. Correo enviado.' : ' (destinatario sin correo registrado).'), 'success');
     cerrarModal('modal-entrega');
     await cargarSolicitudes();
+    await verDetalle(trab.solicitud_id);
     await actualizarBadges();
   } catch(e) { toast('Error: ' + e.message, 'error'); }
   finally { btn.classList.remove('loading'); btn.disabled = false; }
@@ -588,7 +549,9 @@ async function verDetalle(id) {
       _sb.from('bib_solicitudes')
         .select('id,id_solicitud,asunto,remitente_email,gmail_message_id,destinatarios,email_destino,estado,fecha_recepcion,cuerpo,tipo_copia,area,observaciones,nombre_recibe,fecha_entrega,recepcion_confirmada,recepcion_confirmada_en,convertido_a_movimiento,bib_documentos(id,nombre_archivo,storage_path,tipo_mime,tamano_bytes,tipo_impresion,forma_impresion,drive_link,num_hojas)')
         .eq('id', id).single(),
-      _sb.from('bib_trabajos_impresion').select('profesor,archivos,total_hojas').eq('solicitud_id', id)
+      _sb.from('bib_trabajos_impresion')
+        .select('id,profesor,archivos,total_hojas,estado,destinatario_email,nombre_recibe,fecha_entrega,recepcion_confirmada,recepcion_confirmada_en')
+        .eq('solicitud_id', id)
     ]);
     if (error) throw error;
     _detalleActual = data; // cache: evita inyectar asunto/remitente (pueden traer comillas) en un onclick
@@ -628,9 +591,10 @@ async function verDetalle(id) {
       ? data.destinatarios.map(d => (typeof d === 'string' ? d : (d.nombre || d.email))).join(', ')
       : (data.email_destino || '—');
 
-    // Sección trabajos de impresión
+    // Sección trabajos de impresión — cada tarjeta es una entrega independiente
+    // (mismo destinatario/profesor), con su propio estado y botón de Entregar.
     let trabajosHTML = '';
-    if (trabajos && trabajos.length && ['impreso','entregado'].includes(data.estado)) {
+    if (trabajos && trabajos.length && ['impreso','entregado_parcial','entregado'].includes(data.estado)) {
       const totalGeneral = trabajos.reduce((s, t) => s + (t.total_hojas || 0), 0);
       const cards = trabajos.map(t => {
         const arch = Array.isArray(t.archivos) ? t.archivos : [];
@@ -650,12 +614,28 @@ async function verDetalle(id) {
             </div>
           </div>`
         ).join('');
+        const estadoHTML = t.estado === 'entregado'
+          ? `<div style="margin-top:6px;font-size:11px">
+               <span style="color:var(--muted)">Entregado a <strong style="color:var(--text)">${escHtml(t.nombre_recibe||'—')}</strong> · ${fmtFecha(t.fecha_entrega)}</span><br>
+               ${t.recepcion_confirmada
+                 ? `<span style="color:var(--green);font-weight:600">✓ Confirmado${t.recepcion_confirmada_en ? ' · ' + fmtFecha(t.recepcion_confirmada_en) : ''}</span>`
+                 : `<span style="color:var(--muted)">⏳ Sin confirmar</span>
+                    <button style="margin-left:8px;padding:2px 10px;font-size:11px;border-radius:5px;border:1px solid var(--green);color:var(--green);background:transparent;cursor:pointer"
+                      onclick="confirmarRecepcionManualTrabajo(${t.id},${data.id})">✓ Marcar confirmado</button>`}
+             </div>`
+          : `<div style="margin-top:6px">
+               <button class="btn btn-nc" style="padding:4px 12px;font-size:12px" onclick="abrirModalEntrega(${t.id})">
+                 <i class="fa fa-box-open fa-sm"></i> Entregar</button>
+             </div>`;
         return `<div style="border:1px solid var(--border2);border-radius:7px;padding:10px 12px;background:var(--s2);margin-bottom:6px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <div style="font-weight:600;font-size:13px"><i class="fa fa-user fa-sm" style="color:var(--muted);margin-right:5px"></i>${escHtml(t.profesor||'—')}</div>
+            <div style="font-weight:600;font-size:13px"><i class="fa fa-user fa-sm" style="color:var(--muted);margin-right:5px"></i>${escHtml(t.profesor||'—')}
+              <span style="font-weight:400;font-size:11px;margin-left:6px;padding:1px 7px;border-radius:9px;background:${t.estado==='entregado'?'var(--green-bg,#1a3a2a)':'var(--blue-bg,#1a2a3a)'};color:${t.estado==='entregado'?'var(--green)':'var(--blue)'}">${t.estado==='entregado'?'Entregado':'Pendiente'}</span>
+            </div>
             <span style="font-size:12px;font-weight:600;color:var(--blue)">${t.total_hojas||0} hoja${t.total_hojas!==1?'s':''}</span>
           </div>
           ${archLines}
+          ${estadoHTML}
         </div>`;
       }).join('');
       trabajosHTML = `<hr class="msep">
@@ -722,13 +702,27 @@ function descargarTodos(archivos) {
 
 // ── CONFIRMAR RECEPCIÓN MANUAL ────────────────────────────────
 async function confirmarRecepcionManual(id) {
-  const { error } = await _sb.from('bib_solicitudes')
+  // Confirma todos los trabajos entregados y aún sin confirmar de la solicitud.
+  // No se escribe bib_solicitudes.recepcion_confirmada directo: es un espejo que
+  // recalcula trg_sync_solicitud_entrega (sql/032) a partir de bib_trabajos_impresion,
+  // escribirlo aparte quedaría desincronizado apenas cambie un trabajo individual.
+  const { error } = await _sb.from('bib_trabajos_impresion')
     .update({ recepcion_confirmada: true, recepcion_confirmada_en: new Date().toISOString() })
-    .eq('id', id);
+    .eq('solicitud_id', id).eq('estado', 'entregado').eq('recepcion_confirmada', false);
   if (error) { toast('Error al confirmar: ' + error.message, 'error'); return; }
   toast('Recepción confirmada', 'success');
   await cargarSolicitudes();
   verDetalle(id);
+}
+
+async function confirmarRecepcionManualTrabajo(trabajoId, solicitudId) {
+  const { error } = await _sb.from('bib_trabajos_impresion')
+    .update({ recepcion_confirmada: true, recepcion_confirmada_en: new Date().toISOString() })
+    .eq('id', trabajoId);
+  if (error) { toast('Error al confirmar: ' + error.message, 'error'); return; }
+  toast('Recepción confirmada', 'success');
+  await cargarSolicitudes();
+  verDetalle(solicitudId);
 }
 
 // ── FILTROS ───────────────────────────────────────────────────

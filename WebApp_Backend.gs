@@ -30,6 +30,9 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.accion === 'confirmarRecepcionLibro' && e.parameter.sid) {
     return _paginaConfirmacion(e.parameter.sid, 'bib_prestamos_libros', 'el libro');
   }
+  if (e && e.parameter && e.parameter.accion === 'confirmarRecepcionTrabajo' && e.parameter.sid) {
+    return _paginaConfirmacion(e.parameter.sid, 'bib_trabajos_impresion', 'tus copias');
+  }
 
   if (e && e.parameter && e.parameter.payload) {
     var resultado;
@@ -629,12 +632,39 @@ function enviarCorreo(params) {
       case "entregado":
         asunto = "Impresion entregada con exito! :) - " + ref;
         var _gasUrl      = ScriptApp.getService().getUrl();
-        var _confirmUrl  = _gasUrl + '?accion=confirmarRecepcion&sid=' + encodeURIComponent(params.solicitudUuid || '');
-        var _botonConfirm = params.solicitudUuid
+        // trabajoId (entrega por destinatario, js/copias.js) tiene prioridad; solicitudUuid
+        // se mantiene como fallback para el flujo de Ventas (js/ventas.js), que sigue
+        // entregando la solicitud completa y no manda trabajoId.
+        var _accionConf  = params.trabajoId ? 'confirmarRecepcionTrabajo' : 'confirmarRecepcion';
+        var _sidConf     = params.trabajoId || params.solicitudUuid || '';
+        var _confirmUrl  = _gasUrl + '?accion=' + _accionConf + '&sid=' + encodeURIComponent(_sidConf);
+        var _botonConfirm = _sidConf
           ? '<div style="text-align:center;margin:24px 0">' +
             '<a href="' + _confirmUrl + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí las copias</a>' +
             '</div>'
           : '';
+        // Detalle por archivo si viene el array completo (entrega por trabajo); si no,
+        // se mantiene el resumen agregado de siempre (Ventas, u otro llamado antiguo).
+        var _detalleArchivos = '';
+        if (Array.isArray(params.archivos) && params.archivos.length) {
+          _detalleArchivos = params.archivos.map(function(a) {
+            return '<div style="border:1px solid #eee;border-radius:6px;padding:10px 14px;margin:10px 0">' +
+              '<p style="margin:0 0 6px;font-weight:bold;font-size:13px">' + (a.nombre || 'Archivo') + '</p>' +
+              '<table cellpadding="0" cellspacing="0" style="width:100%">' +
+              fila("Copias:", a.copias) +
+              fila("Páginas:", a.paginas) +
+              fila("Impresión:", a.tipo_impresion) +
+              fila("Modo:", a.modo_impresion) +
+              fila("Papel:", a.tamano_hoja) +
+              '</table></div>';
+          }).join('');
+        } else if (params.tipoImpresion || params.numHojas) {
+          _detalleArchivos =
+            '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+            (params.tipoImpresion ? fila("Tipo:", params.tipoImpresion + (params.forma ? " / " + params.forma : "")) : "") +
+            (params.numHojas      ? fila("Hojas:", params.numHojas + " hojas") : "") +
+            '</table>';
+        }
         html = wrap("#6f42c1", "Todo listo! :D",
           '<p>Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!</p>' +
           '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
@@ -642,10 +672,9 @@ function enviarCorreo(params) {
           fila("&gt;&gt; Asunto:", params.asunto) +
           fila("Entregado a:", params.nombreRecibe) +
           fila("Fecha:", params.fechaEntrega) +
-          (params.materia       ? fila("Materia:", params.materia) : "") +
-          (params.tipoImpresion ? fila("Tipo:", params.tipoImpresion + (params.forma ? " / " + params.forma : "")) : "") +
-          (params.numHojas      ? fila("Hojas:", params.numHojas + " hojas") : "") +
+          (params.materia ? fila("Materia:", params.materia) : "") +
           '</table>' +
+          _detalleArchivos +
           _botonConfirm +
           '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0">' +
           'Gracias por usar el servicio de la Biblioteca Goyavier, fue un gusto ayudarte.</p>');
@@ -653,10 +682,38 @@ function enviarCorreo(params) {
           "Todo listo! :D\n\n" +
           "Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!\n\n" +
           ">> Asunto:\n" + (params.asunto || ref) + "\n\n" +
-          (params.solicitudUuid ? "Confirma que recibiste las copias en este enlace:\n" + _confirmUrl + "\n\n" : "") +
+          (_sidConf ? "Confirma que recibiste las copias en este enlace:\n" + _confirmUrl + "\n\n" : "") +
           "Gracias por usar el servicio de la biblioteca, fue un gusto ayudarte.\n\n" +
           "[BIBLIOTECA]\nColegio Goyavier\n\n" +
           "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "recordatorio_entregas":
+        asunto = "Tienes entregas pendientes de confirmar - Biblioteca";
+        var _gasUrlRec = ScriptApp.getService().getUrl();
+        var _bloquesRec = (params.entregas || []).map(function(en) {
+          var _cUrl = _gasUrlRec + '?accion=confirmarRecepcionTrabajo&sid=' + encodeURIComponent(en.trabajo_id);
+          var _archsRec = (en.archivos || []).map(function(a) {
+            return fila((a.nombre || 'Archivo') + ':', a.copias + ' copias, ' + a.paginas + ' páginas');
+          }).join('');
+          return '<div style="border:1px solid #eee;border-radius:6px;padding:14px 16px;margin:12px 0">' +
+            '<p style="margin:0 0 8px;font-weight:bold">Entrega #' + (en.id_solicitud || '') + '</p>' +
+            '<table cellpadding="0" cellspacing="0" style="width:100%">' + _archsRec + '</table>' +
+            '<div style="text-align:center;margin-top:12px">' +
+            '<a href="' + _cUrl + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:13px">Confirmar esta entrega</a>' +
+            '</div></div>';
+        }).join('');
+        html = wrap("#e8a33d", "Tienes entregas pendientes de confirmar",
+          '<p>Hace una semana registramos la entrega de los siguientes trabajos de impresión, pero aún no hemos recibido tu confirmación de recepción:</p>' +
+          _bloquesRec +
+          '<p style="background:#fff8ec;border-left:3px solid #e8a33d;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Si ya recibiste el material, confirma cada entrega con su propio botón.</p>');
+        plain =
+          "Tienes entregas pendientes de confirmar.\n\n" +
+          "Hace una semana registramos la entrega de tus trabajos de impresión, pero aún no " +
+          "hemos recibido tu confirmación. Revisa este correo en HTML para ver los enlaces " +
+          "de confirmación de cada entrega.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier";
         break;
 
       case "movimiento_entregado":
@@ -1035,6 +1092,60 @@ function verificarFechasMes() {
   catch(e) { _notificarError('verificarAlertas', e.toString()); }
   try { archivarAdjuntosAntiguos(); }
   catch(e) { _notificarError('archivarAdjuntosAntiguos', e.toString()); }
+  try { _recordarConfirmacionesPendientes(); }
+  catch(e) { _notificarError('recordarConfirmacionesPendientes', e.toString()); }
+}
+
+// ── Recordatorio de confirmacion de recepcion (Fase entregas por trabajo).
+// Corre junto al resto de verificarFechasMes. Recoge bib_vista_recordatorios_pendientes
+// (trabajos entregados hace 7+ dias, sin confirmar, nunca recordados -- ver sql/032),
+// agrupa por destinatario para mandar UN correo consolidado por persona (no uno por
+// entrega), y marca recordatorio_enviado_en para que no se repita manana.
+function _recordarConfirmacionesPendientes() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return;
+
+  var filas = sbGet(_url, _key, 'bib_vista_recordatorios_pendientes?select=*');
+  if (filas && filas.error) {
+    _auditar('recordatorios', 'recordar_confirmaciones', 'error', 'error', filas.error);
+    return;
+  }
+  if (!Array.isArray(filas) || !filas.length) {
+    _auditar('recordatorios', 'recordar_confirmaciones', 'ok', 'info', 'Sin recordatorios pendientes');
+    return;
+  }
+
+  var porEmail = {};
+  filas.forEach(function(f) {
+    (porEmail[f.destinatario_email] = porEmail[f.destinatario_email] || []).push(f);
+  });
+
+  var enviados = 0;
+  Object.keys(porEmail).forEach(function(email) {
+    var entregas = porEmail[email];
+    var idsIncluidos = entregas.map(function(e) { return e.trabajo_id; });
+    var r;
+    try {
+      r = enviarCorreo({ tipo: 'recordatorio_entregas', destinatario: email, entregas: entregas,
+        idSolicitud: entregas.length + ' entrega(s) pendiente(s)' });
+    } catch(ex) {
+      r = { ok: false, error: ex.toString() };
+    }
+    sbPost(_url, _key, 'bib_recordatorios_entrega', {
+      destinatario_email: email,
+      trabajo_ids: idsIncluidos,
+      cantidad_entregas: entregas.length,
+      estado_envio: (r && r.ok) ? 'ok' : 'error',
+      error: (r && r.error) || null
+    });
+    if (r && r.ok) {
+      sbPatch(_url, _key, 'bib_trabajos_impresion?id=in.(' + idsIncluidos.join(',') + ')',
+        { recordatorio_enviado_en: new Date().toISOString() });
+      enviados++;
+    }
+  });
+  _auditar('recordatorios', 'recordar_confirmaciones', 'ok', 'info',
+    enviados + ' de ' + Object.keys(porEmail).length + ' recordatorio(s) enviado(s), ' + filas.length + ' entrega(s) en total');
 }
 
 // ── Revisa bib_vista_alertas (umbrales de errores por modulo, ver
