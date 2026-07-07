@@ -20,6 +20,7 @@ function badge(estado) {
     recibido: ['b-recibido', 'Recibido'],
     impreso:  ['b-impreso',  'Impreso'],
     preparado:['b-impreso',  'Preparado'],
+    entregado_parcial:['b-parcial','Entrega parcial'],
     entregado:['b-entregado','Entregado'],
     cancelado:['b-cancelado','Cancelado'],
     activo:   ['b-recibido', 'Activo'],

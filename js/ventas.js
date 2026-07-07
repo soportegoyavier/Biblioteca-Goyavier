@@ -311,7 +311,8 @@ function recalcSaldo() { recalcPrecioPersonal(); }
 
 // ── PRECIO AUTOMÁTICO ─────────────────────────────────────────
 function _calcTrabajoPersonal() {
-  let totalHojas = 0;
+  let totalHojas   = 0; // hojas de papel físicas (para stock/reporte) -- doble cara usa la mitad
+  let totalPaginas = 0; // páginas realmente impresas (para precio) -- doble cara NO las reduce
   const archivos = [];
   const nuevasAsig = new Set();
 
@@ -323,6 +324,7 @@ function _calcTrabajoPersonal() {
     const hoja    = document.querySelector('input[name="mp-man-hoja"]:checked')?.value || 'Carta';
     const hojas   = modo === 'Doble cara' ? copias * Math.ceil(paginas / 2) : copias * paginas;
     totalHojas    = hojas;
+    totalPaginas  = copias * paginas;
     const nombre  = document.getElementById('mp-nombre')?.value.trim() || 'Trabajo manual';
     archivos.push({ nombre_archivo: nombre, copias, paginas, tipo, modo, tamano_hoja: hoja, hojas });
   } else {
@@ -337,7 +339,8 @@ function _calcTrabajoPersonal() {
       const hoja    = document.querySelector(`input[name="pfhoja-${fid}"]:checked`)?.value || 'Carta';
       const hojas   = modo === 'Doble cara' ? copias * Math.ceil(paginas / 2) : copias * paginas;
       archivos.push({ id: f.id, nombre_archivo: f.nombre_archivo, copias, paginas, tipo, modo, tamano_hoja: hoja, hojas });
-      totalHojas += hojas;
+      totalHojas   += hojas;
+      totalPaginas += copias * paginas;
       nuevasAsig.add(fid);
     }
   }
@@ -362,12 +365,14 @@ function _calcTrabajoPersonal() {
     precioUnitario = _esCandidatoColab ? 200 : 300;
   }
 
+  // Precio por PÁGINA impresa, no por hoja de papel: doble cara usa menos hojas
+  // pero imprime las mismas páginas (mismo consumo de tóner), no debe salir más barato.
   _precioUnitarioCalculado = precioUnitario;
-  return { precioTotal: totalHojas * precioUnitario, totalHojas, archivos, nuevasAsig, porcentajeColor, modoToner };
+  return { precioTotal: totalPaginas * precioUnitario, totalHojas, totalPaginas, archivos, nuevasAsig, porcentajeColor, modoToner };
 }
 
 function recalcPrecioPersonal() {
-  const { precioTotal, totalHojas, porcentajeColor, modoToner } = _calcTrabajoPersonal();
+  const { precioTotal, totalHojas, totalPaginas, porcentajeColor, modoToner } = _calcTrabajoPersonal();
   document.getElementById('mp-precio').value = precioTotal;
 
   const tipo = _esManualPersonal
@@ -382,9 +387,9 @@ function recalcPrecioPersonal() {
     let detalle = '';
     if (tipo === 'Color') {
       const tonerMode = document.querySelector('input[name="mp-toner"]:checked')?.value || 'ahorro';
-      detalle = `Color ${porcentajeColor}%${tonerMode === 'full' ? ' + Full toner' : ''} · ${totalHojas} hoja${totalHojas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
+      detalle = `Color ${porcentajeColor}%${tonerMode === 'full' ? ' + Full toner' : ''} · ${totalPaginas} página${totalPaginas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
     } else {
-      detalle = `B&N${_esCandidatoColab ? ' (colaborador)' : ''} · ${totalHojas} hoja${totalHojas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
+      detalle = `B&N${_esCandidatoColab ? ' (colaborador)' : ''} · ${totalPaginas} página${totalPaginas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
     }
     detalleEl.textContent = detalle;
     calcEl.textContent    = fmtPesos(precioTotal);

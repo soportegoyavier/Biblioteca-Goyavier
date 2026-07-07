@@ -14,7 +14,6 @@ let _asuntoSolicitud     = '';
 let _impresoDestinatarios = []; // destinatarios visibles en el modal de impresión
 let _impresoExpanded = new Set(); // emails de colaboradores expandidos en modal impresión
 let _archivoUrlsMap = new Map(); // docId → { url, nombre } para descargas en modal impresión
-let _entregaSelNames = new Set(); // nombres seleccionados en modal entrega
 let _detalleActual = null; // datos completos de la solicitud abierta en modal-detalle (evita inyectar comillas de asunto/remitente en un onclick)
 
 let _mes = _hoy.getMonth();
