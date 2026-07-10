@@ -704,11 +704,13 @@ async function confirmarNuevaSolicitudManual() {
     const correos = c.bib_colaboradores_correos || [];
     nombre = c.nombre;
     area   = c.area || null;
-    email  = (correos.find(e => e.principal) || correos[0] || {}).email || null;
+    // remitente_email es NOT NULL en bib_solicitudes -- '' (no null) cuando no hay email.
+    email  = (correos.find(e => e.principal) || correos[0] || {}).email || '';
   } else {
     nombre = document.getElementById('mnm-nombre').value.trim() || null;
     // No se envían correos a estudiantes, aunque el campo tenga un valor residual.
-    email  = tipo === 'estudiante' ? null : (document.getElementById('mnm-email').value.trim() || null);
+    // remitente_email es NOT NULL en bib_solicitudes -- '' (no null) cuando no aplica.
+    email  = tipo === 'estudiante' ? '' : (document.getElementById('mnm-email').value.trim() || '');
     grado  = document.getElementById('mnm-grado').value.trim() || null;
     // Un email con formato inválido (ej. ".") se guardaba tal cual y luego fallaba
     // en cada intento de envío (comprobante de pago, entrega...). Se valida acá con
