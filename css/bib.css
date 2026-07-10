@@ -492,6 +492,8 @@ hr.msep{border:none;border-top:1px solid var(--border);margin:14px 0}
 .btn-entrega-conf:hover{background:rgba(63,185,80,.12)}
 .btn-danger-sm{padding:4px 7px;background:rgba(248,81,73,.1);color:var(--red);border:1px solid rgba(248,81,73,.25)}
 .btn-danger-sm:hover:not(:disabled){background:rgba(248,81,73,.18)}
+.btn-ghost-sm{padding:4px 7px;background:var(--blue-bg);color:var(--blue);border:1px solid rgba(91,141,238,.3);border-radius:5px;cursor:pointer;display:inline-flex;align-items:center}
+.btn-ghost-sm:hover:not(:disabled){background:rgba(91,141,238,.22)}
 .btn-danger{background:rgba(248,81,73,.18);color:var(--red);border:1px solid rgba(248,81,73,.35)}
 .btn-danger:hover:not(:disabled){background:rgba(248,81,73,.25)}
 .btn-confirm-red{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.3)}

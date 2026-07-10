@@ -746,13 +746,3 @@ function setFiltro(estado, btn) {
   cargarSolicitudes();
 }
 function buscarDebounce() { clearTimeout(_buscarTimer); _buscarTimer = setTimeout(cargarSolicitudes, 380); }
-
-// ── SEGMENTED CONTROL ─────────────────────────────────────────
-function setSeg(grupoId, btn, valor) {
-  document.querySelectorAll('#'+grupoId+' .seg-opt').forEach(b => b.classList.remove('sel'));
-  btn.classList.add('sel');
-  document.getElementById(grupoId==='seg-tipo'?'mi-tipo':'mi-forma').value = valor;
-}
-function limpiarSeg(grupoId) {
-  document.querySelectorAll('#'+grupoId+' .seg-opt').forEach(b => b.classList.remove('sel'));
-}
