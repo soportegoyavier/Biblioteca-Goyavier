@@ -710,6 +710,12 @@ async function confirmarNuevaSolicitudManual() {
     // No se envían correos a estudiantes, aunque el campo tenga un valor residual.
     email  = tipo === 'estudiante' ? null : (document.getElementById('mnm-email').value.trim() || null);
     grado  = document.getElementById('mnm-grado').value.trim() || null;
+    // Un email con formato inválido (ej. ".") se guardaba tal cual y luego fallaba
+    // en cada intento de envío (comprobante de pago, entrega...). Se valida acá con
+    // la misma regla que usa el backend (validarEmail en WebApp_Backend.gs).
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast('El email no tiene un formato válido', 'error'); return;
+    }
   }
 
   const btn = document.getElementById('btn-conf-manual');
