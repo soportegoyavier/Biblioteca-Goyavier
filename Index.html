@@ -619,22 +619,54 @@
       <div class="mh-ico amber"><i class="fa fa-user-plus" style="color:var(--amber)"></i></div>
       <div class="mh-info">
         <h3>Nueva Solicitud Manual</h3>
-        <div class="mh-sub">Estudiante o persona sin correo electrónico</div>
+        <div class="mh-sub">Estudiante, colaborador o persona externa</div>
       </div>
       <button class="btn-cls" onclick="cerrarModal('modal-nueva-manual')"><i class="fa fa-xmark"></i></button>
     </div>
     <div class="mb">
       <div class="fgroup">
-        <label>Nombre del solicitante <span style="color:var(--muted);font-size:11px">(opcional)</span></label>
-        <input type="text" id="mnm-nombre" class="fc" placeholder="Ej: Juan Pérez">
-      </div>
-      <div class="fgroup">
-        <label>Email <span style="color:var(--muted);font-size:11px">(opcional — para enviar confirmación)</span></label>
-        <input type="email" id="mnm-email" class="fc" placeholder="correo@ejemplo.com" oninput="onMnmEmailChange()">
-        <div id="mnm-colab-badge" style="display:none;margin-top:5px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
-          <i class="fa fa-tag fa-xs"></i> Es colaborador — precio B&amp;N $200/página
+        <label>Tipo de solicitante</label>
+        <div style="display:flex;gap:14px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+            <input type="radio" name="mnm-tipo" value="estudiante" checked onchange="onMnmTipoChange()"> Estudiante
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+            <input type="radio" name="mnm-tipo" value="colaborador" onchange="onMnmTipoChange()"> Colaborador
+          </label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+            <input type="radio" name="mnm-tipo" value="externo" onchange="onMnmTipoChange()"> Externo
+          </label>
         </div>
       </div>
+
+      <div id="mnm-sec-manual">
+        <div class="fgroup">
+          <label>Nombre del solicitante <span style="color:var(--muted);font-size:11px">(opcional)</span></label>
+          <input type="text" id="mnm-nombre" class="fc" placeholder="Ej: Juan Pérez">
+        </div>
+        <div class="fgroup">
+          <label>Grado <span style="color:var(--muted);font-size:11px">(opcional)</span></label>
+          <input type="text" id="mnm-grado" class="fc" placeholder="Ej: 9°B">
+        </div>
+        <div class="fgroup">
+          <label>Email <span style="color:var(--muted);font-size:11px">(opcional — para enviar confirmación)</span></label>
+          <input type="email" id="mnm-email" class="fc" placeholder="correo@ejemplo.com" oninput="onMnmEmailChange()">
+          <div id="mnm-colab-badge" style="display:none;margin-top:5px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
+            <i class="fa fa-tag fa-xs"></i> Es colaborador — precio B&amp;N $200/página
+          </div>
+        </div>
+      </div>
+
+      <div id="mnm-sec-colab" style="display:none">
+        <div class="fgroup">
+          <label>Colaborador <span class="req">*</span></label>
+          <select id="mnm-colab-select" class="fc" onchange="onMnmColabSeleccionado()">
+            <option value="">Selecciona...</option>
+          </select>
+        </div>
+        <div id="mnm-colab-info" style="display:none;font-size:12px;color:var(--muted);margin:-4px 0 12px;padding-left:2px"></div>
+      </div>
+
       <div class="fgroup">
         <label>Descripción / Asunto <span class="req">*</span></label>
         <input type="text" id="mnm-asunto" class="fc" placeholder="Ej: Taller de Matemáticas" onkeydown="if(event.key==='Enter')confirmarNuevaSolicitudManual()">
@@ -1170,13 +1202,13 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=6"></script>
-<script src="js/state.js?v=10"></script>
+<script src="js/state.js?v=11"></script>
 <script src="js/utils.js?v=11"></script>
 <script src="js/auth.js?v=7"></script>
 <script src="js/nav.js?v=10"></script>
 <script src="js/dashboard.js?v=8"></script>
 <script src="js/copias.js?v=9"></script>
-<script src="js/ventas.js?v=9"></script>
+<script src="js/ventas.js?v=11"></script>
 <script src="js/caja.js?v=7"></script>
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>

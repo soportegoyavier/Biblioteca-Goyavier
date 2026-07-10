@@ -466,6 +466,7 @@ async function agregarTrabajoPersonal(evt) {
         trabajo_id: trab.id, solicitud_id: _idPersonal,
         remitente_email: _personalSolCache?.remitente_email || '', monto: pagado, notas: 'Pago inicial'
       });
+      await _enviarComprobantePago(trab.id, pagado);
     }
 
     nuevasAsig.forEach(fid => _archivosPersonalAsig.add(fid));
@@ -497,6 +498,31 @@ async function agregarTrabajoPersonal(evt) {
   }
 }
 
+// Comprobante de pago -- se manda tanto desde el pago inicial (al crear el
+// trabajo) como desde un abono posterior, mismo correo en los dos casos.
+// Solo si el remitente tiene correo real (_personalSolCache.remitente_email,
+// no el nombre de respaldo que usa la UI cuando no hay correo).
+async function _enviarComprobantePago(trabajoId, monto) {
+  const emailReal = _personalSolCache?.remitente_email;
+  if (!emailReal) return false;
+  const { data: trab } = await _sb.from('bib_trabajos_personal')
+    .select('nombre,precio_total,valor_pagado').eq('id', trabajoId).single();
+  if (!trab) return false;
+  const saldo = Math.max(0, (trab.precio_total||0) - (trab.valor_pagado||0));
+  gasCall('enviarCorreo', {
+    tipo: 'abono_registrado',
+    destinatario: emailReal,
+    nombreRecibe: _personalSolCache?.remitente_nombre || emailReal,
+    asunto: trab.nombre,
+    monto: monto,
+    precioTotal: trab.precio_total,
+    pagado: trab.valor_pagado,
+    saldo: saldo,
+    fecha: new Date().toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
+  }).catch(()=>{});
+  return true;
+}
+
 // ── MODAL ABONO ───────────────────────────────────────────────
 function abrirModalAbono(trabajoId, solicitudId, emailRemit) {
   _abonoTrabajoId   = trabajoId;
@@ -520,8 +546,9 @@ async function confirmarAbono() {
       remitente_email: _abonoEmailRemit, monto, notas: notas||null
     });
     if (error) throw error;
+    const seEnvioCorreo = await _enviarComprobantePago(_abonoTrabajoId, monto);
     cerrarModal('modal-abono');
-    toast('Abono registrado', 'success');
+    toast('Abono registrado' + (seEnvioCorreo ? ' · Comprobante enviado' : ''), 'success');
     if (document.getElementById('modal-personal').classList.contains('open')) {
       const trabRes = await _sb.from('bib_trabajos_personal')
         .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
@@ -537,11 +564,47 @@ async function confirmarAbono() {
 // ── NUEVA SOLICITUD MANUAL ─────────────────────────────────────
 function abrirModalNuevaSolicitudManual() {
   document.getElementById('mnm-nombre').value = '';
+  document.getElementById('mnm-grado').value = '';
   document.getElementById('mnm-email').value = '';
   document.getElementById('mnm-asunto').value = '';
   document.getElementById('mnm-colab-badge').style.display = 'none';
+  document.getElementById('mnm-colab-select').value = '';
+  document.getElementById('mnm-colab-info').style.display = 'none';
+  document.querySelector('input[name="mnm-tipo"][value="estudiante"]').checked = true;
+  onMnmTipoChange();
   document.getElementById('modal-nueva-manual').classList.add('open');
   setTimeout(() => document.getElementById('mnm-nombre').focus(), 80);
+}
+
+// Estudiante/Externo: nombre+grado+email libres. Colaborador: se elige de
+// una lista (ya tiene nombre/área/correo en bib_colaboradores), solo falta
+// la descripción del trabajo.
+async function onMnmTipoChange() {
+  const tipo    = document.querySelector('input[name="mnm-tipo"]:checked')?.value || 'estudiante';
+  const esColab = tipo === 'colaborador';
+  document.getElementById('mnm-sec-manual').style.display = esColab ? 'none' : '';
+  document.getElementById('mnm-sec-colab').style.display  = esColab ? '' : 'none';
+  if (esColab && !_mnmColabsCache) {
+    const sel = document.getElementById('mnm-colab-select');
+    sel.innerHTML = '<option value="">Cargando...</option>';
+    const { data, error } = await _sb.from('bib_colaboradores')
+      .select('id,nombre,area,bib_colaboradores_correos(email,principal)')
+      .eq('activo', true).order('area').order('nombre');
+    _mnmColabsCache = error ? [] : (data || []);
+    sel.innerHTML = '<option value="">Selecciona...</option>' +
+      _mnmColabsCache.map(c => `<option value="${c.id}">${escHtml(c.nombre)}${c.area ? ' — ' + escHtml(c.area) : ''}</option>`).join('');
+  }
+}
+
+function onMnmColabSeleccionado() {
+  const id   = document.getElementById('mnm-colab-select').value;
+  const info = document.getElementById('mnm-colab-info');
+  const c    = (_mnmColabsCache || []).find(x => String(x.id) === id);
+  if (!c) { info.style.display = 'none'; return; }
+  const correos = c.bib_colaboradores_correos || [];
+  const email   = (correos.find(e => e.principal) || correos[0] || {}).email || '';
+  info.textContent  = [c.area, email].filter(Boolean).join(' · ') || 'Sin área ni correo registrados';
+  info.style.display = '';
 }
 
 function onMnmEmailChange() {
@@ -557,18 +620,36 @@ function onMnmEmailChange() {
 }
 
 async function confirmarNuevaSolicitudManual() {
-  const nombre = document.getElementById('mnm-nombre').value.trim();
-  const email  = document.getElementById('mnm-email').value.trim();
+  const tipo   = document.querySelector('input[name="mnm-tipo"]:checked')?.value || 'estudiante';
   const asunto = document.getElementById('mnm-asunto').value.trim();
   if (!asunto) { toast('Escribe la descripción del trabajo', 'error'); return; }
+
+  let nombre = null, email = null, area = null, grado = null;
+  if (tipo === 'colaborador') {
+    const id = document.getElementById('mnm-colab-select').value;
+    const c  = (_mnmColabsCache || []).find(x => String(x.id) === id);
+    if (!c) { toast('Selecciona un colaborador', 'error'); return; }
+    const correos = c.bib_colaboradores_correos || [];
+    nombre = c.nombre;
+    area   = c.area || null;
+    email  = (correos.find(e => e.principal) || correos[0] || {}).email || null;
+  } else {
+    nombre = document.getElementById('mnm-nombre').value.trim() || null;
+    email  = document.getElementById('mnm-email').value.trim() || null;
+    grado  = document.getElementById('mnm-grado').value.trim() || null;
+  }
+
   const btn = document.getElementById('btn-conf-manual');
   btn.disabled = true; btn.classList.add('loading');
   try {
     const { data: sol, error } = await _sb.from('bib_solicitudes').insert({
       tipo_remitente: 'personal',
+      tipo_solicitante: tipo,
       es_manual: true,
-      remitente_nombre: nombre || null,
-      remitente_email: email || null,
+      remitente_nombre: nombre,
+      remitente_email: email,
+      area: area,
+      grado: grado,
       asunto: asunto,
       estado: 'pendiente',
       fecha_recepcion: new Date().toISOString()
@@ -618,13 +699,22 @@ async function marcarEntregadoVentas() {
 
     const sendEmail = document.getElementById('mev-send-email')?.checked;
     if (sendEmail && sol.remitente_email) {
+      // Solo Ventas cobra (Gestión de Copias es institucional, sin precio) --
+      // por eso el correo de aquí sí lleva pagado/saldo y se marca esPersonal
+      // para que el backend lo distinga visualmente del de Copias.
+      const { data: trabajos } = await _sb.from('bib_trabajos_personal')
+        .select('precio_total,valor_pagado').eq('solicitud_id', _confirmarEntregaVentasId);
+      const total  = (trabajos||[]).reduce((a,t) => a+(t.precio_total||0), 0);
+      const pagado = (trabajos||[]).reduce((a,t) => a+(t.valor_pagado||0), 0);
       gasCall('enviarCorreo', {
         tipo: 'entregado',
         destinatario: sol.remitente_email,
         asunto: sol.asunto,
         nombreRecibe: sol.remitente_nombre || sol.remitente_email,
         solicitudUuid: String(_confirmarEntregaVentasId),
-        fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+        fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' }),
+        esPersonal: true,
+        precioTotal: total, pagado: pagado, saldo: Math.max(0, total - pagado)
       }).catch(() => {});
     }
 

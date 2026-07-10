@@ -638,11 +638,6 @@ function enviarCorreo(params) {
         var _accionConf  = params.trabajoId ? 'confirmarRecepcionTrabajo' : 'confirmarRecepcion';
         var _sidConf     = params.trabajoId || params.solicitudUuid || '';
         var _confirmUrl  = _gasUrl + '?accion=' + _accionConf + '&sid=' + encodeURIComponent(_sidConf);
-        var _botonConfirm = _sidConf
-          ? '<div style="text-align:center;margin:24px 0">' +
-            '<a href="' + _confirmUrl + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí las copias</a>' +
-            '</div>'
-          : '';
         // Detalle por archivo si viene el array completo (entrega por trabajo); si no,
         // se mantiene el resumen agregado de siempre (Ventas, u otro llamado antiguo).
         var _detalleArchivos = '';
@@ -665,7 +660,38 @@ function enviarCorreo(params) {
             (params.numHojas      ? fila("Hojas:", params.numHojas + " hojas") : "") +
             '</table>';
         }
-        html = wrap("#6f42c1", "Todo listo! :D",
+        // Ventas (personal, con precio) manda esPersonal=true; Gestion de Copias
+        // (institucional, sin precio) no lo manda. Color y titulo cambian de
+        // verdad (naranja vs morado), no solo una linea de texto -- para que
+        // se distingan a simple vista, no solo leyendo el detalle.
+        var _pesosEntregado  = function(n) { return '$ ' + Math.round(n || 0).toLocaleString(); };
+        var _colorEntregado  = params.esPersonal ? "#f0883e" : "#6f42c1";
+        var _colorEntregadoBg = params.esPersonal ? "#fff3e0" : "#f5f0ff";
+        var _tituloEntregado = params.esPersonal ? "Entrega Personal! :D" : "Todo listo! :D";
+        var _badgePersonal = params.esPersonal
+          ? '<div style="text-align:center;margin-bottom:16px">' +
+            '<span style="display:inline-block;background:#fff3e0;color:#f0883e;border:1px solid #f0883e;' +
+            'padding:4px 14px;border-radius:20px;font-size:12px;font-weight:bold;letter-spacing:.03em">COMPROBANTE PERSONAL</span>' +
+            '</div>'
+          : '';
+        var _infoPago = '';
+        if (params.esPersonal) {
+          var _saldoPend = params.saldo || 0;
+          _infoPago = '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+            fila("Valor total:", _pesosEntregado(params.precioTotal)) +
+            fila("Pagado:", _pesosEntregado(params.pagado)) +
+            fila("Saldo:", _saldoPend > 0.5
+              ? '<span style="color:#dc3545;font-weight:bold">' + _pesosEntregado(_saldoPend) + ' pendiente</span>'
+              : '<span style="color:#28a745;font-weight:bold">Pagado completo</span>') +
+            '</table>';
+        }
+        var _botonConfirm = _sidConf
+          ? '<div style="text-align:center;margin:24px 0">' +
+            '<a href="' + _confirmUrl + '" style="display:inline-block;background:' + _colorEntregado + ';color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí las copias</a>' +
+            '</div>'
+          : '';
+        html = wrap(_colorEntregado, _tituloEntregado,
+          _badgePersonal +
           '<p>Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!</p>' +
           '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
           fila("Referencia:", ref) +
@@ -675,15 +701,56 @@ function enviarCorreo(params) {
           (params.materia ? fila("Materia:", params.materia) : "") +
           '</table>' +
           _detalleArchivos +
+          _infoPago +
           _botonConfirm +
-          '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          '<p style="background:' + _colorEntregadoBg + ';border-left:3px solid ' + _colorEntregado + ';padding:12px 16px;border-radius:4px;margin:16px 0">' +
           'Gracias por usar el servicio de la Biblioteca Goyavier, fue un gusto ayudarte.</p>');
         plain =
-          "Todo listo! :D\n\n" +
+          _tituloEntregado + "\n\n" +
+          (params.esPersonal ? "[[ COMPROBANTE PERSONAL ]]\n\n" : "") +
           "Tu impresion fue entregada exitosamente. Esperamos que te sea de mucha utilidad!\n\n" +
           ">> Asunto:\n" + (params.asunto || ref) + "\n\n" +
+          (params.esPersonal ? "Valor total: " + _pesosEntregado(params.precioTotal) + "\n" +
+            "Pagado: " + _pesosEntregado(params.pagado) + "\n" +
+            "Saldo: " + (params.saldo > 0.5 ? _pesosEntregado(params.saldo) + " pendiente" : "Pagado completo") + "\n\n" : "") +
           (_sidConf ? "Confirma que recibiste las copias en este enlace:\n" + _confirmUrl + "\n\n" : "") +
           "Gracias por usar el servicio de la biblioteca, fue un gusto ayudarte.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier\n\n" +
+          "Tienes alguna pregunta? Responde a este correo.";
+        break;
+
+      case "abono_registrado":
+        var _pesosAbono  = function(n) { return '$ ' + Math.round(n || 0).toLocaleString(); };
+        var _saldoAbono  = params.saldo || 0;
+        var _pagadoTotal = _saldoAbono <= 0.5;
+        asunto = (_pagadoTotal ? "Pago completo registrado" : "Abono registrado") + " - " + ref;
+        html = wrap(_pagadoTotal ? "#28a745" : "#6f42c1",
+          _pagadoTotal ? "¡Pago completo! :)" : "Abono registrado",
+          '<p>' + (_pagadoTotal
+            ? 'Confirmamos que recibimos tu pago y con esto tu trabajo queda totalmente pagado.'
+            : 'Confirmamos que recibimos tu abono para el siguiente trabajo.') + '</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          fila("&gt;&gt; Trabajo:", params.asunto) +
+          fila("Fecha:", params.fecha) +
+          fila("Monto recibido:", _pesosAbono(params.monto)) +
+          fila("Valor total:", _pesosAbono(params.precioTotal)) +
+          fila("Pagado hasta hoy:", _pesosAbono(params.pagado)) +
+          fila("Saldo:", _pagadoTotal
+            ? '<span style="color:#28a745;font-weight:bold">Pagado completo</span>'
+            : '<span style="color:#dc3545;font-weight:bold">' + _pesosAbono(_saldoAbono) + ' pendiente</span>') +
+          '</table>' +
+          '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0;font-size:13px">' +
+          'Este correo es tu comprobante de este pago. Consérvalo por cualquier duda futura.</p>');
+        plain =
+          (_pagadoTotal ? "Pago completo registrado\n\n" : "Abono registrado\n\n") +
+          ">> Trabajo:\n" + (params.asunto || ref) + "\n\n" +
+          "Fecha: " + params.fecha + "\n" +
+          "Monto recibido: " + _pesosAbono(params.monto) + "\n" +
+          "Valor total: " + _pesosAbono(params.precioTotal) + "\n" +
+          "Pagado hasta hoy: " + _pesosAbono(params.pagado) + "\n" +
+          "Saldo: " + (_pagadoTotal ? "Pagado completo" : _pesosAbono(_saldoAbono) + " pendiente") + "\n\n" +
+          "Este correo es tu comprobante de este pago. Consérvalo por cualquier duda futura.\n\n" +
           "[BIBLIOTECA]\nColegio Goyavier\n\n" +
           "Tienes alguna pregunta? Responde a este correo.";
         break;
