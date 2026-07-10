@@ -648,12 +648,15 @@
           <label>Grado <span style="color:var(--muted);font-size:11px">(opcional)</span></label>
           <input type="text" id="mnm-grado" class="fc" placeholder="Ej: 9°B">
         </div>
-        <div class="fgroup">
+        <div class="fgroup" id="mnm-email-group">
           <label>Email <span style="color:var(--muted);font-size:11px">(opcional — para enviar confirmación)</span></label>
           <input type="email" id="mnm-email" class="fc" placeholder="correo@ejemplo.com" oninput="onMnmEmailChange()">
           <div id="mnm-colab-badge" style="display:none;margin-top:5px;font-size:12px;color:var(--accent);background:var(--s2);border:1px solid var(--accent);border-radius:5px;padding:3px 10px">
             <i class="fa fa-tag fa-xs"></i> Es colaborador — precio B&amp;N $200/página
           </div>
+        </div>
+        <div id="mnm-estudiante-nota" style="display:none;font-size:12px;color:var(--muted);margin:-6px 0 12px;padding-left:2px">
+          <i class="fa fa-circle-info fa-xs"></i> No se envían correos a estudiantes
         </div>
       </div>
 
@@ -871,6 +874,40 @@
       <button class="btn btn-ghost" onclick="cerrarModal('modal-abono')">Cancelar</button>
       <button class="btn btn-primary" id="btn-conf-abono" onclick="confirmarAbono()">
         <i class="fa fa-circle-check fa-sm"></i> Registrar pago
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: EDITAR TRABAJO (corregir hojas/páginas y/o el total abonado) -->
+<div class="mo" id="modal-editar-trabajo">
+  <div class="mc" style="max-width:380px">
+    <div class="mh">
+      <div class="mh-ico amber"><i class="fa fa-pen" style="color:var(--amber)"></i></div>
+      <div class="mh-info">
+        <h3>Editar Trabajo</h3>
+        <div class="mh-sub" id="mte-info" style="color:var(--muted);font-size:12px"></div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-editar-trabajo')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <div class="fc-grid" style="margin-bottom:12px">
+        <div class="fgroup"><div class="fc-label">Hojas / páginas</div><input type="number" id="mte-hojas" class="fc" min="0"></div>
+        <div class="fgroup"><div class="fc-label">Precio total</div><input type="number" id="mte-precio" class="fc" min="0" step="100"></div>
+      </div>
+      <div class="fgroup" style="margin-bottom:12px">
+        <label>Total abonado <span style="color:var(--muted);font-size:11px">(lo que el cliente ya pagó en total)</span></label>
+        <input type="number" id="mte-pagado" class="fc" min="0" step="100">
+      </div>
+      <div class="fgroup">
+        <label>Motivo de la corrección <span style="color:var(--muted);font-size:11px">(opcional)</span></label>
+        <input type="text" id="mte-notas" class="fc" placeholder="Ej: se contaron mal las páginas">
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-editar-trabajo')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-conf-editar-trabajo" onclick="confirmarEditarTrabajo()">
+        <i class="fa fa-circle-check fa-sm"></i> Guardar cambios
       </button>
     </div>
   </div>
@@ -1202,13 +1239,13 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/config.js?v=6"></script>
-<script src="js/state.js?v=11"></script>
+<script src="js/state.js?v=12"></script>
 <script src="js/utils.js?v=11"></script>
 <script src="js/auth.js?v=7"></script>
 <script src="js/nav.js?v=10"></script>
 <script src="js/dashboard.js?v=8"></script>
-<script src="js/copias.js?v=9"></script>
-<script src="js/ventas.js?v=11"></script>
+<script src="js/copias.js?v=10"></script>
+<script src="js/ventas.js?v=12"></script>
 <script src="js/caja.js?v=7"></script>
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>

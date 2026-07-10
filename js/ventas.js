@@ -146,7 +146,7 @@ async function abrirModalPersonal(solicitudId) {
   try {
     const [solRes, trabRes] = await Promise.all([
       _sb.from('bib_solicitudes')
-        .select('id,id_solicitud,remitente_email,remitente_nombre,asunto,es_manual,gmail_message_id,bib_documentos(id,nombre_archivo,tipo_mime,storage_path)')
+        .select('id,id_solicitud,remitente_email,remitente_nombre,asunto,es_manual,tipo_solicitante,gmail_message_id,bib_documentos(id,nombre_archivo,tipo_mime,storage_path)')
         .eq('id', solicitudId).single(),
       _sb.from('bib_trabajos_personal')
         .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
@@ -155,7 +155,7 @@ async function abrirModalPersonal(solicitudId) {
     if (solRes.error) throw solRes.error;
     const sol = solRes.data;
     _esManualPersonal = sol.es_manual || false;
-    _personalSolCache = { remitente_email: sol.remitente_email, remitente_nombre: sol.remitente_nombre };
+    _personalSolCache = { remitente_email: sol.remitente_email, remitente_nombre: sol.remitente_nombre, tipo_solicitante: sol.tipo_solicitante };
     // "Responder" solo aplica a correos reales (no a solicitudes manuales, que no tienen hilo de Gmail al que contestar)
     const btnResponder = document.getElementById('mp-btn-responder');
     if (!_esManualPersonal && sol.gmail_message_id) {
@@ -233,10 +233,10 @@ function renderArchivosPersonal() {
     const nom  = f.nombre_archivo.length > 45 ? f.nombre_archivo.substring(0,45)+'…' : f.nombre_archivo;
     if (asig) return `<div class="file-item"><div class="file-check-row file-assigned"><span>${nom}</span><span class="file-assigned-badge"><i class="fa fa-check fa-xs"></i> Asignado</span></div></div>`;
     return `<div class="file-item" id="pfi-${fid}">
-      <div class="file-check-row" onclick="toggleArchivoPers('${fid}')">
-        <input type="checkbox" id="pfchk-${fid}" onclick="event.stopPropagation();toggleArchivoPers('${fid}')">
+      <label class="file-check-row" for="pfchk-${fid}">
+        <input type="checkbox" id="pfchk-${fid}" onchange="toggleArchivoPers('${fid}')">
         <span>${nom}</span>
-      </div>
+      </label>
       <div class="file-config" id="pfconf-${fid}">
         <div class="fc-grid">
           <div class="fgroup"><div class="fc-label">Copias</div><input type="number" id="pfcopias-${fid}" class="fc" value="1" min="1"></div>
@@ -269,7 +269,6 @@ function renderArchivosPersonal() {
 function toggleArchivoPers(fid) {
   const chk = document.getElementById('pfchk-' + fid);
   const conf = document.getElementById('pfconf-' + fid);
-  if (chk) chk.checked = !chk.checked;
   if (conf) conf.classList.toggle('open', chk?.checked);
   onTipoFileChange();
 }
@@ -277,6 +276,7 @@ function toggleArchivoPers(fid) {
 function _renderTrabajosPersonalList(trabajos, emailRemit) {
   const section = document.getElementById('mp-trab-section');
   const finBar  = document.getElementById('mp-fin-bar');
+  _trabajosPersonalCache = trabajos;
   if (!trabajos.length) { section.style.display = 'none'; finBar.style.display = 'none'; return; }
   section.style.display = '';
   finBar.style.display  = '';
@@ -295,7 +295,10 @@ function _renderTrabajosPersonalList(trabajos, emailRemit) {
     return `<div class="trab-p-card">
       <div class="trab-p-head">
         <div class="trab-p-name">${t.nombre}</div>
-        ${saldo>0.005?`<button class="btn-abono" onclick="event.stopPropagation();abrirModalAbono(${t.id},${_idPersonal},'${emailRemit}')"><i class="fa fa-hand-holding-dollar fa-xs"></i> Abonar</button>`:''}
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost-sm" onclick="event.stopPropagation();abrirModalEditarTrabajo(${t.id})" title="Editar hojas/páginas o total abonado"><i class="fa fa-pen fa-xs"></i></button>
+          ${saldo>0.005?`<button class="btn-abono" onclick="event.stopPropagation();abrirModalAbono(${t.id},${_idPersonal},'${emailRemit}')"><i class="fa fa-hand-holding-dollar fa-xs"></i> Abonar</button>`:''}
+        </div>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:6px">${archStr}${hojaStr}</div>
       <div class="trab-p-fin">
@@ -305,6 +308,66 @@ function _renderTrabajosPersonalList(trabajos, emailRemit) {
       </div>
     </div>`;
   }).join('');
+}
+
+// ── EDITAR TRABAJO (corregir hojas/páginas y/o el total abonado) ──
+function abrirModalEditarTrabajo(trabajoId) {
+  const t = (_trabajosPersonalCache || []).find(x => x.id === trabajoId);
+  if (!t) { toast('Trabajo no encontrado', 'error'); return; }
+  _editarTrabajoId = trabajoId;
+  document.getElementById('mte-info').textContent   = t.nombre;
+  document.getElementById('mte-hojas').value  = t.total_hojas || 0;
+  document.getElementById('mte-precio').value = t.precio_total || 0;
+  document.getElementById('mte-pagado').value = t.valor_pagado || 0;
+  document.getElementById('mte-notas').value  = '';
+  document.getElementById('modal-editar-trabajo').classList.add('open');
+}
+
+// El total abonado no se sobreescribe directamente: bib_trabajos_personal.valor_pagado
+// se recalcula a partir de la suma de bib_pagos (mismo mecanismo que usa "Abonar"), así
+// que una corrección se registra como un pago con el delta (puede ser negativo).
+async function confirmarEditarTrabajo() {
+  const hojas       = parseFloat(document.getElementById('mte-hojas').value);
+  const precio      = parseFloat(document.getElementById('mte-precio').value);
+  const pagadoNuevo = parseFloat(document.getElementById('mte-pagado').value);
+  const notas       = document.getElementById('mte-notas').value.trim();
+  if ([hojas, precio, pagadoNuevo].some(v => isNaN(v) || v < 0)) {
+    toast('Los valores no pueden estar vacíos ni ser negativos', 'error'); return;
+  }
+  const t = (_trabajosPersonalCache || []).find(x => x.id === _editarTrabajoId);
+  if (!t) { toast('Trabajo no encontrado', 'error'); return; }
+
+  const btn = document.getElementById('btn-conf-editar-trabajo');
+  btn.disabled = true; btn.classList.add('loading');
+  try {
+    const { error: uErr } = await _sb.from('bib_trabajos_personal')
+      .update({ total_hojas: hojas, precio_total: precio })
+      .eq('id', _editarTrabajoId);
+    if (uErr) throw uErr;
+
+    const delta = pagadoNuevo - (t.valor_pagado || 0);
+    if (Math.abs(delta) > 0.005) {
+      const { error: pErr } = await _sb.from('bib_pagos').insert({
+        trabajo_id: _editarTrabajoId, solicitud_id: _idPersonal,
+        remitente_email: _personalSolCache?.remitente_email || '',
+        monto: delta, notas: 'Corrección manual' + (notas ? ': ' + notas : '')
+      });
+      if (pErr) throw pErr;
+    }
+
+    cerrarModal('modal-editar-trabajo');
+    toast('Trabajo actualizado', 'success');
+    const trabRes = await _sb.from('bib_trabajos_personal')
+      .select('id,nombre,archivos,total_hojas,precio_total,valor_pagado,observaciones,created_at')
+      .eq('solicitud_id', _idPersonal).order('created_at', { ascending: true });
+    _renderTrabajosPersonalList(trabRes.data || [], _personalSolCache?.remitente_email || _personalSolCache?.remitente_nombre || '');
+    if (_pagina === 'ventas') cargarVentas();
+    if (_pagina === 'caja')   cargarCaja();
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('loading');
+  }
 }
 
 function recalcSaldo() { recalcPrecioPersonal(); }
@@ -504,7 +567,8 @@ async function agregarTrabajoPersonal(evt) {
 // no el nombre de respaldo que usa la UI cuando no hay correo).
 async function _enviarComprobantePago(trabajoId, monto) {
   const emailReal = _personalSolCache?.remitente_email;
-  if (!emailReal) return false;
+  // No se envían correos a estudiantes, aunque haya quedado un email registrado.
+  if (!emailReal || _personalSolCache?.tipo_solicitante === 'estudiante') return false;
   const { data: trab } = await _sb.from('bib_trabajos_personal')
     .select('nombre,precio_total,valor_pagado').eq('id', trabajoId).single();
   if (!trab) return false;
@@ -582,8 +646,16 @@ function abrirModalNuevaSolicitudManual() {
 async function onMnmTipoChange() {
   const tipo    = document.querySelector('input[name="mnm-tipo"]:checked')?.value || 'estudiante';
   const esColab = tipo === 'colaborador';
+  const esEstudiante = tipo === 'estudiante';
   document.getElementById('mnm-sec-manual').style.display = esColab ? 'none' : '';
   document.getElementById('mnm-sec-colab').style.display  = esColab ? '' : 'none';
+  // No se envían correos a estudiantes: ni se pide ni se guarda el email.
+  document.getElementById('mnm-email-group').style.display    = esEstudiante ? 'none' : '';
+  document.getElementById('mnm-estudiante-nota').style.display = esEstudiante ? '' : 'none';
+  if (esEstudiante) {
+    document.getElementById('mnm-email').value = '';
+    document.getElementById('mnm-colab-badge').style.display = 'none';
+  }
   if (esColab && !_mnmColabsCache) {
     const sel = document.getElementById('mnm-colab-select');
     sel.innerHTML = '<option value="">Cargando...</option>';
@@ -635,7 +707,8 @@ async function confirmarNuevaSolicitudManual() {
     email  = (correos.find(e => e.principal) || correos[0] || {}).email || null;
   } else {
     nombre = document.getElementById('mnm-nombre').value.trim() || null;
-    email  = document.getElementById('mnm-email').value.trim() || null;
+    // No se envían correos a estudiantes, aunque el campo tenga un valor residual.
+    email  = tipo === 'estudiante' ? null : (document.getElementById('mnm-email').value.trim() || null);
     grado  = document.getElementById('mnm-grado').value.trim() || null;
   }
 
@@ -669,19 +742,21 @@ async function confirmarNuevaSolicitudManual() {
 // ── ENTREGAR VENTAS (paso 1) ───────────────────────────────────
 async function abrirEntregarVentasById(solicitudId) {
   const { data, error } = await _sb.from('bib_solicitudes')
-    .select('id,remitente_email,remitente_nombre,asunto').eq('id', solicitudId).single();
+    .select('id,remitente_email,remitente_nombre,asunto,tipo_solicitante').eq('id', solicitudId).single();
   if (error) { toast('Error al cargar solicitud', 'error'); return; }
   _confirmarEntregaVentasId = data.id;
   const info = data.remitente_nombre || data.remitente_email || data.asunto || ('Solicitud #' + solicitudId);
   document.getElementById('mev-info').textContent = info;
   const emailRow  = document.getElementById('mev-email-row');
   const emailDest = document.getElementById('mev-email-dest');
-  if (data.remitente_email) {
+  // No se envían correos a estudiantes, aunque haya quedado un email registrado.
+  if (data.remitente_email && data.tipo_solicitante !== 'estudiante') {
     emailRow.style.display = '';
     emailDest.textContent  = data.remitente_email;
     document.getElementById('mev-send-email').checked = true;
   } else {
     emailRow.style.display = 'none';
+    document.getElementById('mev-send-email').checked = false;
   }
   document.getElementById('modal-entregar-ventas').classList.add('open');
 }
@@ -694,11 +769,12 @@ async function marcarEntregadoVentas() {
     const { data: sol, error } = await _sb.from('bib_solicitudes')
       .update({ fecha_entrega: ahora })
       .eq('id', _confirmarEntregaVentasId)
-      .select('id,remitente_email,remitente_nombre,asunto').single();
+      .select('id,remitente_email,remitente_nombre,asunto,tipo_solicitante').single();
     if (error) throw error;
 
     const sendEmail = document.getElementById('mev-send-email')?.checked;
-    if (sendEmail && sol.remitente_email) {
+    // No se envían correos a estudiantes, aunque el checkbox quede marcado.
+    if (sendEmail && sol.remitente_email && sol.tipo_solicitante !== 'estudiante') {
       // Solo Ventas cobra (Gestión de Copias es institucional, sin precio) --
       // por eso el correo de aquí sí lleva pagado/saldo y se marca esPersonal
       // para que el backend lo distinga visualmente del de Copias.
@@ -718,7 +794,8 @@ async function marcarEntregadoVentas() {
       }).catch(() => {});
     }
 
-    toast('Marcado como entregado' + (sendEmail && sol.remitente_email ? ' · Correo enviado' : ''), 'success');
+    const seEnvio = sendEmail && sol.remitente_email && sol.tipo_solicitante !== 'estudiante';
+    toast('Marcado como entregado' + (seEnvio ? ' · Correo enviado' : ''), 'success');
     cerrarModal('modal-entregar-ventas');
     cargarVentas();
   } catch(e) {
