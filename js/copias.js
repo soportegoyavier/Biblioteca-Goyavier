@@ -640,12 +640,20 @@ async function verDetalle(id) {
                <button class="btn btn-nc" style="padding:4px 12px;font-size:12px" onclick="abrirModalEntrega(${t.id})">
                  <i class="fa fa-box-open fa-sm"></i> Entregar</button>
              </div>`;
+        const reenviarHTML = t.destinatario_email ? `
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-ghost-sm" onclick="reenviarNotificacionColaborador(${t.id},'recibido')" title="Reenviar correo de Recibido a ${escHtml(t.destinatario_email)}"><i class="fa fa-inbox fa-xs"></i></button>
+            <button class="btn btn-ghost-sm" onclick="reenviarNotificacionColaborador(${t.id},'impreso')" title="Reenviar correo de Impreso a ${escHtml(t.destinatario_email)}"><i class="fa fa-print fa-xs"></i></button>
+          </div>` : '';
         return `<div style="border:1px solid var(--border2);border-radius:7px;padding:10px 12px;background:var(--s2);margin-bottom:6px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <div style="font-weight:600;font-size:13px"><i class="fa fa-user fa-sm" style="color:var(--muted);margin-right:5px"></i>${escHtml(t.profesor||'—')}
               <span style="font-weight:400;font-size:11px;margin-left:6px;padding:1px 7px;border-radius:9px;background:${t.estado==='entregado'?'var(--green-bg,#1a3a2a)':'var(--blue-bg,#1a2a3a)'};color:${t.estado==='entregado'?'var(--green)':'var(--blue)'}">${t.estado==='entregado'?'Entregado':'Pendiente'}</span>
             </div>
-            <span style="font-size:12px;font-weight:600;color:var(--blue)">${t.total_hojas||0} hoja${t.total_hojas!==1?'s':''}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:12px;font-weight:600;color:var(--blue)">${t.total_hojas||0} hoja${t.total_hojas!==1?'s':''}</span>
+              ${reenviarHTML}
+            </div>
           </div>
           ${archLines}
           ${estadoHTML}
@@ -694,6 +702,33 @@ async function verDetalle(id) {
         : `<p style="font-size:12px;color:var(--muted)"><i class="fa fa-box-archive fa-sm"></i> Ya enviado a Materiales</p>`}`;
   } catch(e) {
     document.getElementById('md-body').innerHTML = `<p style="color:var(--red);padding:12px">Error: ${e.message}</p>`;
+  }
+}
+
+// ── REENVIAR NOTIFICACIÓN (recibido/impreso) ──────────────────
+// Para cuando se corrigió el colaborador de un trabajo después de que esos
+// correos ya salieron dirigidos al colaborador equivocado (destinatario_email
+// solo se usa al momento de marcar recibido/impreso, no se reenvía solo).
+async function reenviarNotificacionColaborador(trabajoId, tipo) {
+  try {
+    const { data: t, error } = await _sb.from('bib_trabajos_impresion')
+      .select('id,profesor,destinatario_email,total_hojas,solicitud_id,bib_solicitudes(id_solicitud,asunto,materia)')
+      .eq('id', trabajoId).single();
+    if (error) throw error;
+    if (!t.destinatario_email) { toast('Este trabajo no tiene un colaborador con correo asignado', 'error'); return; }
+    const sol = t.bib_solicitudes || {};
+    const { data: numP } = await _sb.rpc('get_num_solicitud_para_email',
+      { p_email: t.destinatario_email, p_solicitud_id: t.solicitud_id });
+    const params = {
+      tipo, destinatario: t.destinatario_email, numPersonal: numP || 1,
+      idSolicitud: sol.id_solicitud, asunto: sol.asunto, profesor: t.profesor
+    };
+    if (tipo === 'impreso') { params.materia = sol.materia; params.numHojas = t.total_hojas; }
+    const res = await gasCall('enviarCorreo', params);
+    if (!res.ok) throw new Error(res.error || 'Error desconocido');
+    toast(`Correo de "${tipo}" reenviado a ${t.destinatario_email}`, 'success');
+  } catch(e) {
+    toast('Error al reenviar: ' + e.message, 'error');
   }
 }
 
