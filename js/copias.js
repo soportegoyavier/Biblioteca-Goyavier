@@ -65,7 +65,7 @@ function accionHTML(r) {
   const canBtn = `<button class="btn btn-danger-sm" style="margin-left:4px" onclick="abrirModalCancelar(${r.id},'copias')" title="Cancelar"><i class="fa fa-ban fa-xs"></i></button>`;
   if (r.estado === 'pendiente') return `<button class="btn btn-na" onclick="marcarRecibido(${r.id},this)"><i class="fa fa-check fa-sm"></i> Recibir</button>${canBtn}`;
   if (r.estado === 'recibido')  return `<button class="btn btn-nb" onclick="abrirModalImpreso(${r.id})"><i class="fa fa-print fa-sm"></i> Imprimir</button>${canBtn}`;
-  if (['impreso','entregado_parcial'].includes(r.estado)) return `<button class="btn btn-nc" onclick="verDetalle(${r.id})"><i class="fa fa-box-open fa-sm"></i> Ver entregas</button>${canBtn}`;
+  if (['impreso','entregado_parcial'].includes(r.estado)) return `<button class="btn btn-nc" onclick="abrirEntregaODetalle(${r.id})"><i class="fa fa-box-open fa-sm"></i> Entregar</button>${canBtn}`;
   return '<span class="td-m">—</span>';
 }
 
@@ -92,7 +92,7 @@ function renderCards(rows) {
       <div class="sol-card-footer">
         ${r.estado==='pendiente'?`<button class="btn btn-na" onclick="marcarRecibido(${r.id},this)"><i class="fa fa-check fa-sm"></i> Recibir</button>`:''}
         ${r.estado==='recibido' ?`<button class="btn btn-nb" onclick="abrirModalImpreso(${r.id})"><i class="fa fa-print fa-sm"></i> Imprimir</button>`:''}
-        ${['impreso','entregado_parcial'].includes(r.estado)?`<button class="btn btn-nc" onclick="verDetalle(${r.id})"><i class="fa fa-box-open fa-sm"></i> Ver entregas</button>`:''}
+        ${['impreso','entregado_parcial'].includes(r.estado)?`<button class="btn btn-nc" onclick="abrirEntregaODetalle(${r.id})"><i class="fa fa-box-open fa-sm"></i> Entregar</button>`:''}
         ${['pendiente','recibido','impreso'].includes(r.estado)?`<button class="btn btn-danger-sm" onclick="abrirModalCancelar(${r.id},'copias')"><i class="fa fa-ban fa-xs"></i></button>`:''}
         <button class="btn btn-danger" onclick="abrirModalEliminar(${r.id})" title="Eliminar correo"><i class="fa fa-trash-can fa-xs"></i></button>
         <button class="btn btn-detail" onclick="verDetalle(${r.id})"><i class="fa fa-eye fa-sm"></i> Detalle</button>
@@ -470,6 +470,19 @@ function resetSSDisplay() {
   const display = document.getElementById('ss-display');
   if (display) { display.textContent = 'Buscar o seleccionar...'; display.className = 'ss-placeholder'; }
   closeSS();
+}
+
+// Si la solicitud tiene un solo trabajo pendiente, entrega directo (evita el
+// clic extra de pasar por el detalle cuando no hace falta elegir entre varios
+// destinatarios). Con 2+ pendientes, sí hace falta el detalle para elegir.
+async function abrirEntregaODetalle(solicitudId) {
+  const { data } = await _sb.from('bib_trabajos_impresion')
+    .select('id').eq('solicitud_id', solicitudId).eq('estado', 'pendiente');
+  if (data && data.length === 1) {
+    abrirModalEntrega(data[0].id);
+  } else {
+    verDetalle(solicitudId);
+  }
 }
 
 // ── MODAL ENTREGA (por trabajo/destinatario, no por solicitud completa) ──
