@@ -100,8 +100,22 @@ function renderVentas(rows, emailsColab) {
 }
 
 async function reclasificarComoInstitucional(solicitudId) {
-  if (!confirm('¿Mover esta solicitud a Gestión de Copias como institucional?')) return;
+  if (!confirm('¿Mover esta solicitud a Gestión de Copias como institucional? Esto elimina cualquier trabajo y deuda registrados en Ventas para esta solicitud (institucional no cobra).')) return;
   try {
+    // Institucional (Gestión de Copias) no cobra -- si esta solicitud ya tenía
+    // trabajos/pagos registrados en Ventas hay que borrarlos al reclasificar,
+    // porque bib_trabajos_personal deja de ser visible en cualquier lado en
+    // cuanto tipo_remitente ya no es 'personal' (Ventas filtra por eso, Copias
+    // no hace join con esa tabla) y la deuda queda huérfana e insaldable.
+    const { data: trabajos } = await _sb.from('bib_trabajos_personal')
+      .select('id').eq('solicitud_id', solicitudId);
+    const idsTrabajos = (trabajos || []).map(t => t.id);
+    if (idsTrabajos.length) {
+      await _sb.from('bib_pagos').delete().in('trabajo_id', idsTrabajos);
+      const { error: eTrab } = await _sb.from('bib_trabajos_personal').delete().in('id', idsTrabajos);
+      if (eTrab) throw eTrab;
+    }
+
     const { error } = await _sb.from('bib_solicitudes')
       .update({ tipo_remitente: 'institucional' })
       .eq('id', solicitudId);
