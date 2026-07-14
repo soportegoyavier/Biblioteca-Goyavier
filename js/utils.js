@@ -45,7 +45,11 @@ function toast(msg, type='info', dur=4500) {
 }
 
 // ── GAS JSONP ────────────────────────────────────────────────
-function gasCall(accion, params = {}) {
+// El backend (WebApp_Backend.gs) valida este access_token contra Supabase
+// Auth antes de ejecutar cualquier acción -- sin sesión real de
+// biblioteca@colegiogoyavier.edu.co, el endpoint responde "No autorizado".
+async function gasCall(accion, params = {}) {
+  const { data: { session } } = await _sb.auth.getSession();
   return new Promise((resolve, reject) => {
     const cb = '_gc_' + Date.now() + '_' + Math.random().toString(36).slice(2);
     let sc;
@@ -58,7 +62,7 @@ function gasCall(accion, params = {}) {
       data?.error ? reject(new Error(data.error)) : resolve(data);
     };
     sc = document.createElement('script');
-    sc.src = GAS_URL + '?payload=' + encodeURIComponent(JSON.stringify({ accion, ...params })) + '&callback=' + cb;
+    sc.src = GAS_URL + '?payload=' + encodeURIComponent(JSON.stringify({ accion, ...params, token: session?.access_token || '' })) + '&callback=' + cb;
     sc.onerror = () => { clearTimeout(t); delete window[cb]; reject(new Error('Error de red con GAS')); };
     document.head.appendChild(sc);
   });

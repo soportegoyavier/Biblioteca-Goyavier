@@ -1,6 +1,16 @@
 // ── AUTH ────────────────────────────────────────────────────
+// Biblioteca es de uso exclusivo de la cuenta institucional -- cualquier
+// otra cuenta que logre autenticarse contra Supabase (password o Google)
+// se cierra sesión de inmediato, antes de mostrar nada de la app.
+const CORREO_AUTORIZADO = 'biblioteca@colegiogoyavier.edu.co';
+
 _sb.auth.onAuthStateChange(async (_, session) => {
   if (session) {
+    if ((session.user.email || '').toLowerCase() !== CORREO_AUTORIZADO) {
+      document.getElementById('lerr').textContent = 'Esta cuenta no tiene acceso a Biblioteca.';
+      await _sb.auth.signOut();
+      return;
+    }
     document.getElementById('login-overlay').style.display = 'none';
     document.getElementById('shell').style.display = '';
     // Perfil del sidebar — no bloquea si falla o tarda
@@ -51,7 +61,10 @@ async function loginGoogle() {
   try {
     const { error } = await _sb.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.origin + window.location.pathname }
+      options: {
+        redirectTo: window.location.origin + window.location.pathname,
+        queryParams: { login_hint: CORREO_AUTORIZADO }
+      }
     });
     if (error) {
       if (error.message && error.message.toLowerCase().includes('not enabled')) {
