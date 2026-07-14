@@ -3,6 +3,17 @@
 // asignación permanente, consumo) sobre un catálogo local reutilizable
 // de materiales. El inventario oficial del colegio es Zaiko.
 
+// Resumen simple (sin marca/color/tamaño/presentación) para el correo de
+// devolución -- el detalle completo solo aplica al correo de entrega, que
+// manda el arreglo de materiales tal cual y arma tarjetas en el backend (GAS).
+function _formatMaterialesResumen(lineas) {
+  return (lineas || []).map(l => {
+    const cant   = l.cantidad_entregada ?? l.cantidad;
+    const unidad = l.unidad_medida ?? l.unidad;
+    return `${cant} ${unidad} de ${l.nombre}`;
+  }).join(', ');
+}
+
 // ── NAVEGACIÓN DESDE ALERTAS DEL DASHBOARD ─────────────────────
 async function irADetalleDesdeAlerta(tipo, id) {
   const navEl = document.querySelector('.ni[data-page="materiales"]');
@@ -406,7 +417,10 @@ async function guardarMovimiento() {
         idSolicitud: idGenerado,
         movimientoId: mov.id,
         tipoMovimiento: tipo,
-        materiales: _movMaterialesTemp.map(l => `${l.cantidad} ${l.unidad} de ${l.nombre}`).join(', '),
+        materiales: _movMaterialesTemp.map(l => ({
+          nombre: l.nombre, cantidad: l.cantidad, unidad: l.unidad,
+          marca: l.marca, color: l.color, tamano: l.tamano, presentacion: l.presentacion
+        })),
         fechaLimite: tipo === 'prestamo' ? fechaLim : null,
       }).catch(()=>{});
     }
@@ -552,7 +566,7 @@ async function confirmarDevolucionMovimiento() {
         tipo: 'movimiento_devuelto',
         destinatario: mov.colaborador_email,
         idSolicitud: mov.id_movimiento,
-        materiales: (lineas || []).map(l => `${l.cantidad_entregada} ${l.unidad_medida} de ${l.nombre}`).join(', '),
+        materiales: _formatMaterialesResumen(lineas),
         fechaDevolucion: fmtFecha(ahora),
         usuarioRecibio: usuario,
       }).catch(()=>{});

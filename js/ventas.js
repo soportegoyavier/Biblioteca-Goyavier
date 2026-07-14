@@ -179,6 +179,13 @@ async function abrirModalPersonal(solicitudId) {
     document.getElementById('mp-asunto').textContent = sol.asunto || '—';
     document.getElementById('mp-nombre').value = sol.asunto || '';
     _archivosPersonalDisp = sol.bib_documentos || [];
+    _archivoUrlsMap = new Map();
+    await Promise.all(_archivosPersonalDisp.map(async f => {
+      if (!f.storage_path) return;
+      const { data: sd } = await _sb.storage.from('biblioteca-adjuntos')
+        .createSignedUrl(f.storage_path, 3600, { download: false });
+      if (sd?.signedUrl) _archivoUrlsMap.set(f.id, { url: sd.signedUrl, nombre: f.nombre_archivo });
+    }));
     const trabajos = trabRes.data || [];
     trabajos.forEach(t => (t.archivos||[]).forEach(a => _archivosPersonalAsig.add(a.id || a.nombre_archivo)));
 
@@ -193,9 +200,11 @@ async function abrirModalPersonal(solicitudId) {
       const rBN    = document.querySelector('input[name="mp-man-tipo"][value="Blanco y negro"]');
       const rUna   = document.querySelector('input[name="mp-man-modo"][value="Una cara"]');
       const rCarta = document.querySelector('input[name="mp-man-hoja"][value="Carta"]');
+      const rBond  = document.querySelector('input[name="mp-man-papel"][value="Bond"]');
       if (rBN)    rBN.checked    = true;
       if (rUna)   rUna.checked   = true;
       if (rCarta) rCarta.checked = true;
+      if (rBond)  rBond.checked  = true;
       document.getElementById('btn-agregar-pers').disabled = false;
       document.getElementById('btn-agregar-pers').style.opacity = '';
       document.getElementById('msg-todos-pers').style.display = 'none';
@@ -231,12 +240,19 @@ function renderArchivosPersonal() {
     const fid  = f.id || f.nombre_archivo;
     const asig = _archivosPersonalAsig.has(fid);
     const nom  = f.nombre_archivo.length > 45 ? f.nombre_archivo.substring(0,45)+'…' : f.nombre_archivo;
-    if (asig) return `<div class="file-item"><div class="file-check-row file-assigned"><span>${nom}</span><span class="file-assigned-badge"><i class="fa fa-check fa-xs"></i> Asignado</span></div></div>`;
+    const dlInfo = _archivoUrlsMap.get(f.id);
+    const dlBtn  = dlInfo
+      ? `<a class="adj-btn dl" href="${escHtml(dlInfo.url)}&download=${encodeURIComponent(dlInfo.nombre)}" target="_blank" title="Descargar" style="flex-shrink:0"><i class="fa fa-download fa-xs"></i></a>`
+      : '';
+    if (asig) return `<div class="file-item"><div class="file-check-row file-assigned"><span style="flex:1">${nom}</span>${dlBtn}<span class="file-assigned-badge"><i class="fa fa-check fa-xs"></i> Asignado</span></div></div>`;
     return `<div class="file-item" id="pfi-${fid}">
-      <label class="file-check-row" for="pfchk-${fid}">
-        <input type="checkbox" id="pfchk-${fid}" onchange="toggleArchivoPers('${fid}')">
-        <span>${nom}</span>
-      </label>
+      <div class="file-check-row">
+        <label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer" for="pfchk-${fid}">
+          <input type="checkbox" id="pfchk-${fid}" onchange="toggleArchivoPers('${fid}')">
+          <span>${nom}</span>
+        </label>
+        ${dlBtn}
+      </div>
       <div class="file-config" id="pfconf-${fid}">
         <div class="fc-grid">
           <div class="fgroup"><div class="fc-label">Copias</div><input type="number" id="pfcopias-${fid}" class="fc" value="1" min="1"></div>
@@ -378,6 +394,7 @@ function _calcTrabajoPersonal() {
   let totalPaginas = 0; // páginas realmente impresas (para precio) -- doble cara NO las reduce
   const archivos = [];
   const nuevasAsig = new Set();
+  let papel = 'Bond';
 
   if (_esManualPersonal) {
     const copias  = parseInt(document.getElementById('mp-man-copias')?.value)  || 1;
@@ -385,11 +402,12 @@ function _calcTrabajoPersonal() {
     const tipo    = document.querySelector('input[name="mp-man-tipo"]:checked')?.value || 'Blanco y negro';
     const modo    = document.querySelector('input[name="mp-man-modo"]:checked')?.value || 'Una cara';
     const hoja    = document.querySelector('input[name="mp-man-hoja"]:checked')?.value || 'Carta';
+    papel         = document.querySelector('input[name="mp-man-papel"]:checked')?.value || 'Bond';
     const hojas   = modo === 'Doble cara' ? copias * Math.ceil(paginas / 2) : copias * paginas;
     totalHojas    = hojas;
     totalPaginas  = copias * paginas;
     const nombre  = document.getElementById('mp-nombre')?.value.trim() || 'Trabajo manual';
-    archivos.push({ nombre_archivo: nombre, copias, paginas, tipo, modo, tamano_hoja: hoja, hojas });
+    archivos.push({ nombre_archivo: nombre, copias, paginas, tipo, modo, tamano_hoja: hoja, tipo_papel: papel, hojas });
   } else {
     for (const f of _archivosPersonalDisp) {
       const fid = f.id || f.nombre_archivo;
@@ -428,14 +446,17 @@ function _calcTrabajoPersonal() {
     precioUnitario = _esCandidatoColab ? 200 : 300;
   }
 
+  // Recargo fijo por trabajo (no por página) cuando el papel no es el Bond normal.
+  const recargoPapel = _esManualPersonal && papel !== 'Bond' ? 500 : 0;
+
   // Precio por PÁGINA impresa, no por hoja de papel: doble cara usa menos hojas
   // pero imprime las mismas páginas (mismo consumo de tóner), no debe salir más barato.
   _precioUnitarioCalculado = precioUnitario;
-  return { precioTotal: totalPaginas * precioUnitario, totalHojas, totalPaginas, archivos, nuevasAsig, porcentajeColor, modoToner };
+  return { precioTotal: totalPaginas * precioUnitario + recargoPapel, totalHojas, totalPaginas, archivos, nuevasAsig, porcentajeColor, modoToner, papel, recargoPapel };
 }
 
 function recalcPrecioPersonal() {
-  const { precioTotal, totalHojas, totalPaginas, porcentajeColor, modoToner } = _calcTrabajoPersonal();
+  const { precioTotal, totalHojas, totalPaginas, porcentajeColor, modoToner, papel, recargoPapel } = _calcTrabajoPersonal();
   document.getElementById('mp-precio').value = precioTotal;
 
   const tipo = _esManualPersonal
@@ -454,6 +475,7 @@ function recalcPrecioPersonal() {
     } else {
       detalle = `B&N${_esCandidatoColab ? ' (colaborador)' : ''} · ${totalPaginas} página${totalPaginas !== 1 ? 's' : ''} × ${fmtPesos(_precioUnitarioCalculado)}`;
     }
+    if (recargoPapel > 0) detalle += ` + ${fmtPesos(recargoPapel)} (papel ${papel})`;
     detalleEl.textContent = detalle;
     calcEl.textContent    = fmtPesos(precioTotal);
   } else {
@@ -543,8 +565,10 @@ async function agregarTrabajoPersonal(evt) {
       document.getElementById('mp-man-paginas').value = '1';
       const rBN    = document.querySelector('input[name="mp-man-tipo"][value="Blanco y negro"]');
       const rCarta = document.querySelector('input[name="mp-man-hoja"][value="Carta"]');
+      const rBond  = document.querySelector('input[name="mp-man-papel"][value="Bond"]');
       if (rBN)    rBN.checked    = true;
       if (rCarta) rCarta.checked = true;
+      if (rBond)  rBond.checked  = true;
     }
     toast('Trabajo registrado', 'success');
 

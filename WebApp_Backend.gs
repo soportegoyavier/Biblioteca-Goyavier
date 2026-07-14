@@ -17,6 +17,31 @@ function _cfg(key) {
   return PropertiesService.getScriptProperties().getProperty(key) || "";
 }
 
+// ── Único correo autorizado a operar la app y a llamar este backend ──
+var CORREO_AUTORIZADO = 'biblioteca@colegiogoyavier.edu.co';
+
+// Valida el access_token de la sesión de Supabase Auth contra el propio
+// Supabase (no es un secreto estatico: es el JWT real de quien esta
+// logueado en el frontend, verificado en cada llamada). Sin esto, la URL
+// de este Web App (visible en js/config.js) permite a cualquiera con el
+// enlace ejecutar acciones como eliminarSolicitud o enviarCorreo sin login.
+function _emailDeSesion(token) {
+  if (!token) return null;
+  var url = _cfg('SUPABASE_URL'), key = _cfg('SUPABASE_KEY');
+  if (!url || !key) return null;
+  try {
+    var res = UrlFetchApp.fetch(url + '/auth/v1/user', {
+      headers: { apikey: key, Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (res.getResponseCode() !== 200) return null;
+    var user = JSON.parse(res.getContentText());
+    return user && user.email ? user.email.toLowerCase() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // ============================================================
 // ENTRY POINT
 // ============================================================
@@ -58,6 +83,10 @@ function doGet(e) {
 }
 
 function despachar(p) {
+  var email = _emailDeSesion(p.token);
+  if (email !== CORREO_AUTORIZADO) {
+    return { error: 'No autorizado' };
+  }
   switch (p.accion) {
     case "sincronizarCorreos":     return sincronizarCorreos(p);
     case "enviarCorreo":           return _enviarCorreoConReintento(p);
@@ -791,6 +820,32 @@ function enviarCorreo(params) {
             '<a href="' + _confirmUrlMat + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí el material</a>' +
             '</div>'
           : '';
+        // Un bloque por material (nombre + cantidad/marca/color/tamaño/presentación),
+        // igual estilo que el detalle por archivo del caso "entregado". Si viene el
+        // resumen viejo como texto plano (llamador antiguo), se mantiene como fallback.
+        var _detalleMateriales = '';
+        var _plainMateriales   = '';
+        if (Array.isArray(params.materiales) && params.materiales.length) {
+          _detalleMateriales = params.materiales.map(function(m) {
+            return '<div style="border:1px solid #eee;border-radius:6px;padding:10px 14px;margin:10px 0">' +
+              '<p style="margin:0 0 6px;font-weight:bold;font-size:13px">' + (m.nombre || 'Material') + '</p>' +
+              '<table cellpadding="0" cellspacing="0" style="width:100%">' +
+              fila("Cantidad:", m.cantidad + " " + (m.unidad || "")) +
+              (m.marca        ? fila("Marca:", m.marca) : "") +
+              (m.color        ? fila("Color:", m.color) : "") +
+              (m.tamano       ? fila("Tamaño:", m.tamano) : "") +
+              (m.presentacion ? fila("Presentación:", m.presentacion) : "") +
+              '</table></div>';
+          }).join('');
+          _plainMateriales = params.materiales.map(function(m) {
+            var extra = [m.marca, m.color, m.tamano, m.presentacion].filter(function(x){ return x; }).join(' · ');
+            return '- ' + m.cantidad + ' ' + (m.unidad || '') + ' de ' + m.nombre + (extra ? ' (' + extra + ')' : '');
+          }).join('\n');
+        } else {
+          _detalleMateriales = '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+            fila("Materiales:", params.materiales) + '</table>';
+          _plainMateriales = params.materiales || '';
+        }
         asunto = "Entrega registrada :) - " + ref;
         html = wrap("#6f42c1", "Entrega registrada :)",
           '<p>Hola!</p>' +
@@ -798,9 +853,9 @@ function enviarCorreo(params) {
           '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
           fila("Referencia:", ref) +
           fila("Tipo:", tipoMovLbl[params.tipoMovimiento] || params.tipoMovimiento) +
-          fila("Materiales:", params.materiales) +
           (params.fechaLimite ? fila("Devolver antes de:", params.fechaLimite) : "") +
           '</table>' +
+          _detalleMateriales +
           _botonConfirmMat +
           (params.fechaLimite
             ? '<p style="background:#fff3e0;border-left:3px solid #f0883e;padding:12px 16px;border-radius:4px;margin:16px 0">' +
@@ -811,7 +866,7 @@ function enviarCorreo(params) {
         plain =
           "Entrega registrada :)\n\n" +
           "Se registro la siguiente entrega de materiales en la Biblioteca.\n\n" +
-          "Materiales:\n" + (params.materiales || "") + "\n\n" +
+          "Materiales:\n" + _plainMateriales + "\n\n" +
           (params.fechaLimite ? "Devolver antes de: " + params.fechaLimite + "\n\n" : "") +
           (params.movimientoId ? "Confirma que recibiste el material en este enlace:\n" + _confirmUrlMat + "\n\n" : "") +
           "[BIBLIOTECA]\nColegio Goyavier\n\n" +
