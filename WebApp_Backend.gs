@@ -1043,6 +1043,25 @@ function enviarCorreo(params) {
           "[BIBLIOTECA]\nColegio Goyavier";
         break;
 
+      case "correccion_registro":
+        asunto = "Corrección de registro - Biblioteca";
+        html = wrap("#6c757d", "Corrección de registro",
+          '<p>Hola!</p>' +
+          '<p>Te escribimos para informarte que un registro de la Biblioteca que llego a tu nombre por error ya fue corregido. No tienes que hacer nada.</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Referencia:", ref) +
+          (params.asuntoOriginal ? fila("Asunto:", params.asuntoOriginal) : "") +
+          '</table>' +
+          '<p style="background:#f4f4f4;border-left:3px solid #6c757d;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Disculpa las molestias. Si tienes alguna duda, responde a este correo.</p>');
+        plain =
+          "Correccion de registro.\n\n" +
+          "Un registro de la Biblioteca que llego a tu nombre por error ya fue corregido internamente. " +
+          "No tienes que hacer nada.\n\n" +
+          "Disculpa las molestias.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier";
+        break;
+
       default:
         return { ok: false, error: "Tipo de correo no reconocido: " + params.tipo };
     }

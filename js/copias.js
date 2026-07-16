@@ -742,17 +742,54 @@ async function confirmarRecepcionManualTrabajo(trabajoId, solicitudId) {
 // Corrige el destinatario ("profesor") de un trabajo de impresión ya
 // registrado, sin tener que anular la entrega y volver a hacerla. Mismo
 // picker compartido que usan Materiales/Libros (abrirPickerDestinatarios).
+// Al corregir: avisa a quien quedó mal asignado que fue un error, y le
+// reenvía a la persona correcta "recibido" + "impreso" -- las dos
+// notificaciones que se perdió porque el trabajo ya pasó por esas etapas
+// bajo el nombre equivocado (esta tarjeta solo se ve cuando la solicitud
+// ya llegó al menos a 'impreso', ver verDetalle).
 function editarProfesorTrabajo(trabajoId, solicitudId) {
   abrirPickerDestinatarios(async (destinatarios) => {
     if (!destinatarios.length) return;
     const elegido = destinatarios[0];
-    const { error } = await _sb.from('bib_trabajos_impresion')
-      .update({ profesor: elegido.nombre, destinatario_email: elegido.email || null })
-      .eq('id', trabajoId);
-    if (error) { toast('Error: ' + error.message, 'error'); return; }
-    toast('Destinatario actualizado', 'success');
-    await cargarSolicitudes();
-    verDetalle(solicitudId);
+    try {
+      const { data: trabajoActual, error: eGet } = await _sb.from('bib_trabajos_impresion')
+        .select('profesor,destinatario_email,total_hojas').eq('id', trabajoId).single();
+      if (eGet) throw eGet;
+
+      const { error } = await _sb.from('bib_trabajos_impresion')
+        .update({ profesor: elegido.nombre, destinatario_email: elegido.email || null })
+        .eq('id', trabajoId);
+      if (error) throw error;
+
+      const { data: sol } = await _sb.from('bib_solicitudes')
+        .select('id_solicitud,asunto').eq('id', solicitudId).single();
+
+      const avisos = [];
+      if (trabajoActual.destinatario_email && trabajoActual.destinatario_email !== elegido.email) {
+        avisos.push(gasCall('enviarCorreo', {
+          tipo: 'correccion_registro', destinatario: trabajoActual.destinatario_email,
+          idSolicitud: sol?.id_solicitud, asuntoOriginal: sol?.asunto,
+        }));
+      }
+      if (elegido.email) {
+        avisos.push(gasCall('enviarCorreo', {
+          tipo: 'recibido', destinatario: elegido.email,
+          idSolicitud: sol?.id_solicitud, asunto: sol?.asunto, profesor: elegido.nombre,
+        }));
+        avisos.push(gasCall('enviarCorreo', {
+          tipo: 'impreso', destinatario: elegido.email,
+          idSolicitud: sol?.id_solicitud, asunto: sol?.asunto, profesor: elegido.nombre,
+          numHojas: trabajoActual.total_hojas || null,
+        }));
+      }
+      await Promise.allSettled(avisos);
+
+      toast('Destinatario actualizado y correos enviados', 'success');
+      await cargarSolicitudes();
+      verDetalle(solicitudId);
+    } catch(e) {
+      toast('Error: ' + e.message, 'error');
+    }
   }, () => {}, []);
 }
 
