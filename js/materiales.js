@@ -361,10 +361,11 @@ async function guardarMovimiento() {
   btn.classList.add('loading'); btn.disabled = true;
   try {
     const usuario = await usuarioActualEmail();
-    const { data: idGenerado } = await _sb.rpc('generar_id_movimiento');
+    const { data: idGenerado, error: eId } = await _sb.rpc('generar_id_movimiento');
+    if (eId || !idGenerado) throw new Error('No se pudo generar el ID del movimiento: ' + (eId ? eId.message : 'respuesta vacía'));
 
     const { data: mov, error: eMov } = await _sb.from('bib_movimientos').insert({
-      id_movimiento: idGenerado || null,
+      id_movimiento: idGenerado,
       tipo,
       colaborador_id: _movColabSel.id || null,
       colaborador_nombre: _movColabSel.nombre,
@@ -818,10 +819,11 @@ async function guardarPrestamoLibro() {
   try {
     const usuario = await usuarioActualEmail();
     const libro = await obtenerOCrearLibro(titulo, editorial, area, codigo);
-    const { data: idGenerado } = await _sb.rpc('generar_id_prestamo_libro');
+    const { data: idGenerado, error: eId } = await _sb.rpc('generar_id_prestamo_libro');
+    if (eId || !idGenerado) throw new Error('No se pudo generar el ID del préstamo: ' + (eId ? eId.message : 'respuesta vacía'));
 
     const { data: prestamo, error } = await _sb.from('bib_prestamos_libros').insert({
-      id_prestamo: idGenerado || null,
+      id_prestamo: idGenerado,
       libro_id: libro.id,
       libro_titulo: titulo,
       tipo_prestatario: tipo,
