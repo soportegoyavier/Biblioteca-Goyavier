@@ -2867,3 +2867,17 @@ function _extraerLinksDrive(htmlBody) {
   });
   return resultados;
 }
+
+// ── Envio puntual de una sola vez: correccion_registro a Julian tras el
+// error de asignacion en BIB-2026-0069. Correr una vez desde el editor
+// (seleccionar esta funcion en el desplegable -> Ejecutar) y luego borrar
+// este bloque completo.
+function _enviarCorreoCorreccionJulian() {
+  var r = enviarCorreo({
+    tipo: 'correccion_registro',
+    destinatario: 'convivenciabachillerato@colegiogoyavier.edu.co',
+    idSolicitud: 'BIB-2026-0069',
+    asuntoOriginal: 'Re: IMPRESIÓN',
+  });
+  Logger.log(JSON.stringify(r));
+}
