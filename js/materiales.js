@@ -460,7 +460,9 @@ async function abrirDetalleMovimiento(id) {
     body.innerHTML = `
       <table style="width:100%;font-size:13px;margin-bottom:16px">
         <tr><td style="color:var(--muted);width:140px;padding:4px 0">Tipo</td><td>${tipoLbl[mov.tipo] || mov.tipo}</td></tr>
-        <tr><td style="color:var(--muted);padding:4px 0">Colaborador</td><td>${escHtml(mov.colaborador_nombre || '—')} (${escHtml(mov.colaborador_email || '—')})</td></tr>
+        <tr><td style="color:var(--muted);padding:4px 0">Colaborador</td><td>${escHtml(mov.colaborador_nombre || '—')} (${escHtml(mov.colaborador_email || '—')})
+          <button class="btn-cls" style="margin-left:8px" onclick="editarColaboradorMovimiento(${mov.id})" title="Cambiar colaborador"><i class="fa fa-pen fa-xs"></i></button>
+        </td></tr>
         <tr><td style="color:var(--muted);padding:4px 0">Área</td><td>${escHtml(mov.area || '—')}</td></tr>
         <tr><td style="color:var(--muted);padding:4px 0">Registrado por</td><td>${escHtml(mov.usuario_registro || '—')} · ${fmtFecha(mov.created_at)}</td></tr>
         <tr><td style="color:var(--muted);padding:4px 0">Confirmación</td><td>${mov.recepcion_confirmada
@@ -641,6 +643,33 @@ async function confirmarRecepcionMaterialManual(id) {
 }
 
 // ── ELIMINAR MOVIMIENTO ────────────────────────────────────────
+// Corrige el colaborador de un movimiento ya guardado sin tener que
+// eliminarlo y recrearlo. Mismo picker que usa el formulario de "Nuevo
+// Movimiento" (elegirColaboradorMovimiento) -- reutilizado, no duplicado.
+function editarColaboradorMovimiento(id) {
+  abrirPickerDestinatarios(async (destinatarios) => {
+    if (!destinatarios.length) return;
+    const elegido = destinatarios[0];
+    try {
+      const { data: correo } = await _sb.from('bib_colaboradores_correos')
+        .select('colaborador_id, bib_colaboradores(area)').eq('email', elegido.email).limit(1).single();
+      const area = correo?.bib_colaboradores?.area;
+      const { error } = await _sb.from('bib_movimientos').update({
+        colaborador_id: correo?.colaborador_id || null,
+        colaborador_nombre: elegido.nombre,
+        colaborador_email: elegido.email,
+        ...(area ? { area } : {}),
+      }).eq('id', id);
+      if (error) throw error;
+      toast('Colaborador actualizado', 'success');
+      await abrirDetalleMovimiento(id);
+      await renderMovimientos();
+    } catch(e) {
+      toast('Error: ' + e.message, 'error');
+    }
+  }, () => {}, []);
+}
+
 async function eliminarMovimiento() {
   if (!_movDetalleId) return;
   if (!confirm('¿Eliminar este movimiento? Esta acción no se puede deshacer.')) return;
