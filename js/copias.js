@@ -643,6 +643,7 @@ async function verDetalle(id) {
         return `<div style="border:1px solid var(--border2);border-radius:7px;padding:10px 12px;background:var(--s2);margin-bottom:6px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <div style="font-weight:600;font-size:13px"><i class="fa fa-user fa-sm" style="color:var(--muted);margin-right:5px"></i>${escHtml(t.profesor||'—')}
+              <button class="btn-cls" style="margin-left:4px" onclick="editarProfesorTrabajo(${t.id},${data.id})" title="Cambiar destinatario"><i class="fa fa-pen fa-xs"></i></button>
               <span style="font-weight:400;font-size:11px;margin-left:6px;padding:1px 7px;border-radius:9px;background:${t.estado==='entregado'?'var(--green-bg,#1a3a2a)':'var(--blue-bg,#1a2a3a)'};color:${t.estado==='entregado'?'var(--green)':'var(--blue)'}">${t.estado==='entregado'?'Entregado':'Pendiente'}</span>
             </div>
             <span style="font-size:12px;font-weight:600;color:var(--blue)">${t.total_hojas||0} hoja${t.total_hojas!==1?'s':''}</span>
@@ -736,6 +737,23 @@ async function confirmarRecepcionManualTrabajo(trabajoId, solicitudId) {
   toast('Recepción confirmada', 'success');
   await cargarSolicitudes();
   verDetalle(solicitudId);
+}
+
+// Corrige el destinatario ("profesor") de un trabajo de impresión ya
+// registrado, sin tener que anular la entrega y volver a hacerla. Mismo
+// picker compartido que usan Materiales/Libros (abrirPickerDestinatarios).
+function editarProfesorTrabajo(trabajoId, solicitudId) {
+  abrirPickerDestinatarios(async (destinatarios) => {
+    if (!destinatarios.length) return;
+    const elegido = destinatarios[0];
+    const { error } = await _sb.from('bib_trabajos_impresion')
+      .update({ profesor: elegido.nombre, destinatario_email: elegido.email || null })
+      .eq('id', trabajoId);
+    if (error) { toast('Error: ' + error.message, 'error'); return; }
+    toast('Destinatario actualizado', 'success');
+    await cargarSolicitudes();
+    verDetalle(solicitudId);
+  }, () => {}, []);
 }
 
 // ── FILTROS ───────────────────────────────────────────────────
