@@ -963,6 +963,86 @@ function enviarCorreo(params) {
           "Tienes alguna pregunta? Responde a este correo.";
         break;
 
+      case "material_vencido":
+        asunto = "Tienes material vencido por devolver - Biblioteca";
+        var _bloquesMatVenc = (params.movimientos || []).map(function(m) {
+          var _matsVenc = (m.materiales || []).map(function(mm) {
+            return fila((mm.nombre || 'Material') + ':', mm.cantidad + ' ' + (mm.unidad || ''));
+          }).join('');
+          return '<div style="border:1px solid #eee;border-radius:6px;padding:14px 16px;margin:12px 0">' +
+            '<p style="margin:0 0 8px;font-weight:bold">' + (m.id_movimiento || '') +
+            ' <span style="color:#dc3545;font-weight:normal">(vencido hace ' + m.dias_vencido + ' dia' + (m.dias_vencido===1?'':'s') + ')</span></p>' +
+            '<table cellpadding="0" cellspacing="0" style="width:100%">' + _matsVenc + '</table>' +
+            '</div>';
+        }).join('');
+        html = wrap("#dc3545", "Tienes material vencido por devolver",
+          '<p>Hola!</p>' +
+          '<p>Los siguientes materiales de la Biblioteca ya pasaron su fecha limite de devolucion:</p>' +
+          _bloquesMatVenc +
+          '<p style="background:#fdecea;border-left:3px solid #dc3545;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Por favor acercate a la Biblioteca a devolverlo lo antes posible. Este recordatorio se repite ' +
+          'cada pocos dias mientras siga pendiente.</p>');
+        plain =
+          "Tienes material vencido por devolver.\n\n" +
+          "Los siguientes materiales de la Biblioteca ya pasaron su fecha limite de devolucion. " +
+          "Revisa este correo en HTML para ver el detalle de cada uno.\n\n" +
+          "Por favor acercate a la Biblioteca a devolverlo lo antes posible.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier";
+        break;
+
+      case "libro_vencido":
+        asunto = "Tienes un libro vencido por devolver - Biblioteca";
+        var _bloquesLibVenc = (params.libros || []).map(function(l) {
+          return '<div style="border:1px solid #eee;border-radius:6px;padding:14px 16px;margin:12px 0">' +
+            '<p style="margin:0;font-weight:bold">' + (l.libro_titulo || '') + '</p>' +
+            '<p style="margin:4px 0 0;font-size:12px;color:#888">' + (l.id_prestamo || '') +
+            ' &middot; <span style="color:#dc3545">vencido hace ' + l.dias_vencido + ' dia' + (l.dias_vencido===1?'':'s') + '</span></p>' +
+            '</div>';
+        }).join('');
+        html = wrap("#dc3545", "Tienes un libro vencido por devolver",
+          '<p>Hola!</p>' +
+          '<p>Los siguientes libros de la Biblioteca ya pasaron su fecha limite de devolucion:</p>' +
+          _bloquesLibVenc +
+          '<p style="background:#fdecea;border-left:3px solid #dc3545;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Por favor acercate a la Biblioteca a devolverlo lo antes posible. Este recordatorio se repite ' +
+          'cada pocos dias mientras siga pendiente.</p>');
+        plain =
+          "Tienes un libro vencido por devolver.\n\n" +
+          "Los siguientes libros de la Biblioteca ya pasaron su fecha limite de devolucion. " +
+          "Revisa este correo en HTML para ver el detalle.\n\n" +
+          "Por favor acercate a la Biblioteca a devolverlo lo antes posible.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier";
+        break;
+
+      case "solicitudes_estancadas":
+        asunto = "Backlog: " + (params.solicitudes||[]).length + " solicitud(es) sin gestionar - Biblioteca";
+        var _filasEstancadas = (params.solicitudes || []).map(function(s) {
+          return '<tr>' +
+            '<td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:12px">' + (s.id_solicitud||'') + '</td>' +
+            '<td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:12px">' + (s.asunto||'') + '</td>' +
+            '<td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:12px">' + (s.profesor||s.remitente_email||'') + '</td>' +
+            '<td style="padding:6px 8px;border-bottom:1px solid #eee;font-size:12px;color:#dc3545;font-weight:bold">' + s.dias_estancada + ' dia' + (s.dias_estancada===1?'':'s') + '</td>' +
+            '</tr>';
+        }).join('');
+        html = wrap("#e8a33d", "Backlog de solicitudes sin gestionar",
+          '<p>Hola!</p>' +
+          '<p>Las siguientes solicitudes de impresion llevan 2 o mas dias en estado "pendiente" sin pasar a "recibido":</p>' +
+          '<table cellpadding="0" cellspacing="0" style="width:100%;margin:16px 0">' +
+          '<tr><th style="text-align:left;padding:6px 8px;font-size:11px;color:#888">ID</th>' +
+          '<th style="text-align:left;padding:6px 8px;font-size:11px;color:#888">Asunto</th>' +
+          '<th style="text-align:left;padding:6px 8px;font-size:11px;color:#888">Profesor/Remitente</th>' +
+          '<th style="text-align:left;padding:6px 8px;font-size:11px;color:#888">Dias</th></tr>' +
+          _filasEstancadas +
+          '</table>' +
+          '<p style="background:#fff8ec;border-left:3px solid #e8a33d;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Este es un aviso interno diario mientras la lista no este vacia.</p>');
+        plain =
+          "Backlog de solicitudes sin gestionar.\n\n" +
+          (params.solicitudes||[]).length + " solicitud(es) llevan 2+ dias en 'pendiente'. " +
+          "Revisa este correo en HTML para ver el detalle, o entra a Auditoria en la app.\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier";
+        break;
+
       default:
         return { ok: false, error: "Tipo de correo no reconocido: " + params.tipo };
     }
@@ -1216,6 +1296,132 @@ function verificarFechasMes() {
   catch(e) { _notificarError('archivarAdjuntosAntiguos', e.toString()); }
   try { _recordarConfirmacionesPendientes(); }
   catch(e) { _notificarError('recordarConfirmacionesPendientes', e.toString()); }
+  try { _recordarMaterialesVencidos(); }
+  catch(e) { _notificarError('recordarMaterialesVencidos', e.toString()); }
+  try { _recordarLibrosVencidos(); }
+  catch(e) { _notificarError('recordarLibrosVencidos', e.toString()); }
+  try { _alertarSolicitudesEstancadas(); }
+  catch(e) { _notificarError('alertarSolicitudesEstancadas', e.toString()); }
+}
+
+// ── Recordatorio de materiales vencidos (prestamo/asignacion sin
+// devolver, fecha limite ya pasada). Corre junto al resto de
+// verificarFechasMes. Recoge bib_vista_recordatorios_materiales_vencidos
+// (ver sql/034), agrupa por colaborador para mandar UN correo consolidado,
+// y marca ultimo_recordatorio_vencido_en para reinsistir en 3 dias si
+// sigue sin devolverse (a diferencia del recordatorio de copias original,
+// este SI se repite -- ver sql/034 para el mismo fix aplicado alla).
+function _recordarMaterialesVencidos() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return;
+
+  var filas = sbGet(_url, _key, 'bib_vista_recordatorios_materiales_vencidos?select=*');
+  if (filas && filas.error) {
+    _auditar('recordatorios', 'materiales_vencidos', 'error', 'error', filas.error);
+    return;
+  }
+  if (!Array.isArray(filas) || !filas.length) {
+    _auditar('recordatorios', 'materiales_vencidos', 'ok', 'info', 'Sin materiales vencidos por recordar');
+    return;
+  }
+
+  var porEmail = {};
+  filas.forEach(function(f) {
+    (porEmail[f.colaborador_email] = porEmail[f.colaborador_email] || []).push(f);
+  });
+  var enviados = 0;
+  Object.keys(porEmail).forEach(function(email) {
+    var movs = porEmail[email];
+    var idsIncluidos = movs.map(function(m) { return m.id; });
+    var r;
+    try {
+      r = enviarCorreo({ tipo: 'material_vencido', destinatario: email, movimientos: movs,
+        idSolicitud: movs.length + ' material(es) vencido(s)' });
+    } catch(ex) {
+      r = { ok: false, error: ex.toString() };
+    }
+    if (r && r.ok) {
+      sbPatch(_url, _key, 'bib_movimientos?id=in.(' + idsIncluidos.join(',') + ')',
+        { ultimo_recordatorio_vencido_en: new Date().toISOString() });
+      enviados++;
+    }
+  });
+  _auditar('recordatorios', 'materiales_vencidos', 'ok', 'info',
+    enviados + ' de ' + Object.keys(porEmail).length + ' recordatorio(s) enviado(s), ' + filas.length + ' material(es) vencido(s) en total');
+}
+
+// ── Recordatorio de libros vencidos. Mismo mecanismo que materiales,
+// sobre bib_vista_recordatorios_libros_vencidos (ver sql/034).
+function _recordarLibrosVencidos() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return;
+
+  var filas = sbGet(_url, _key, 'bib_vista_recordatorios_libros_vencidos?select=*');
+  if (filas && filas.error) {
+    _auditar('recordatorios', 'libros_vencidos', 'error', 'error', filas.error);
+    return;
+  }
+  if (!Array.isArray(filas) || !filas.length) {
+    _auditar('recordatorios', 'libros_vencidos', 'ok', 'info', 'Sin libros vencidos por recordar');
+    return;
+  }
+
+  var porEmail = {};
+  filas.forEach(function(f) {
+    (porEmail[f.prestatario_email] = porEmail[f.prestatario_email] || []).push(f);
+  });
+  var enviados = 0;
+  Object.keys(porEmail).forEach(function(email) {
+    var libros = porEmail[email];
+    var idsIncluidos = libros.map(function(l) { return l.id; });
+    var r;
+    try {
+      r = enviarCorreo({ tipo: 'libro_vencido', destinatario: email, libros: libros,
+        idSolicitud: libros.length + ' libro(s) vencido(s)' });
+    } catch(ex) {
+      r = { ok: false, error: ex.toString() };
+    }
+    if (r && r.ok) {
+      sbPatch(_url, _key, 'bib_prestamos_libros?id=in.(' + idsIncluidos.join(',') + ')',
+        { ultimo_recordatorio_vencido_en: new Date().toISOString() });
+      enviados++;
+    }
+  });
+  _auditar('recordatorios', 'libros_vencidos', 'ok', 'info',
+    enviados + ' de ' + Object.keys(porEmail).length + ' recordatorio(s) enviado(s), ' + filas.length + ' libro(s) vencido(s) en total');
+}
+
+// ── Digest diario de solicitudes de copias estancadas en 'pendiente'
+// 2+ dias (ver bib_vista_solicitudes_estancadas, sql/034). Va al equipo
+// de Biblioteca (REPORTE_EMAIL), no al profesor -- es una alerta interna
+// de backlog, no un recordatorio al usuario final. Se repite todos los
+// dias mientras la lista no este vacia (es un monitor, no un aviso unico).
+function _alertarSolicitudesEstancadas() {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return;
+  var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
+  if (!emailDest) return;
+
+  var filas = sbGet(_url, _key, 'bib_vista_solicitudes_estancadas?select=*');
+  if (filas && filas.error) {
+    _auditar('recordatorios', 'solicitudes_estancadas', 'error', 'error', filas.error);
+    return;
+  }
+  if (!Array.isArray(filas) || !filas.length) {
+    _auditar('recordatorios', 'solicitudes_estancadas', 'ok', 'info', 'Sin solicitudes estancadas');
+    return;
+  }
+
+  var r;
+  try {
+    r = enviarCorreo({ tipo: 'solicitudes_estancadas', destinatario: emailDest, solicitudes: filas,
+      idSolicitud: filas.length + ' solicitud(es) estancada(s)' });
+  } catch(ex) {
+    r = { ok: false, error: ex.toString() };
+  }
+  _auditar('recordatorios', 'solicitudes_estancadas',
+    (r && r.ok) ? 'ok' : 'error', (r && r.ok) ? 'info' : 'advertencia',
+    filas.length + ' solicitud(es) estancada(s), correo ' + ((r && r.ok) ? 'enviado' : 'con error: ' + (r && r.error)));
 }
 
 // ── Recordatorio de confirmacion de recepcion (Fase entregas por trabajo).

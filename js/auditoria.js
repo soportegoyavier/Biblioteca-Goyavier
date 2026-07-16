@@ -84,6 +84,13 @@ async function renderSalud() {
         <div class="rep-stat"><span>Almacenamiento de archivos</span>${_saludPing(pingStorage)}</div>
       </div>
       <div class="rep-card">
+        <div class="rep-card-title">Recordatorios de vencimiento</div>
+        <div class="rep-stat"><span>Copias sin confirmar</span>${_saludFecha(s.ultimo_recordatorio_copias, s.ultimo_recordatorio_copias_resultado)}</div>
+        <div class="rep-stat"><span>Materiales vencidos</span>${_saludFecha(s.ultimo_recordatorio_materiales, s.ultimo_recordatorio_materiales_resultado)}</div>
+        <div class="rep-stat"><span>Libros vencidos</span>${_saludFecha(s.ultimo_recordatorio_libros, s.ultimo_recordatorio_libros_resultado)}</div>
+        <div class="rep-stat"><span>Solicitudes estancadas</span>${_saludFecha(s.ultimo_recordatorio_estancadas, s.ultimo_recordatorio_estancadas_resultado)}</div>
+      </div>
+      <div class="rep-card">
         <div class="rep-card-title">Automatizaciones (Apps Script)</div>
         ${(autom && autom.ok) ? `
           <div class="rep-stat"><span>Cuenta que ejecuta</span><span class="rep-stat-val" style="font-size:12px">${escHtml(autom.cuentaGAS||'—')}</span></div>
@@ -210,7 +217,7 @@ async function renderAlertas() {
 // ── VISOR DE LOGS (Fase 3) ──────────────────────────────────────
 const _AUD_MODULOS_CONOCIDOS = [
   ['sincronizacion','Sincronización'], ['correo','Correo'], ['reconciliacion','Reconciliación'],
-  ['reporte_mensual','Reporte mensual'], ['alertas','Alertas'],
+  ['reporte_mensual','Reporte mensual'], ['alertas','Alertas'], ['recordatorios','Recordatorios'],
   ['bib_solicitudes','bib_solicitudes'], ['bib_documentos','bib_documentos'], ['bib_pagos','bib_pagos'],
   ['bib_trabajos_personal','bib_trabajos_personal'], ['bib_movimientos','bib_movimientos'],
   ['bib_prestamos_libros','bib_prestamos_libros'], ['bib_colaboradores','bib_colaboradores'],
