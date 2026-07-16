@@ -762,7 +762,30 @@ function editarProfesorTrabajo(trabajoId, solicitudId) {
       if (error) throw error;
 
       const { data: sol } = await _sb.from('bib_solicitudes')
-        .select('id_solicitud,asunto').eq('id', solicitudId).single();
+        .select('id_solicitud,asunto,profesor,destinatarios,email_destino').eq('id', solicitudId).single();
+
+      // bib_solicitudes.destinatarios/profesor/email_destino son un espejo
+      // del destinatario elegido al momento de "Registrar Impresion"
+      // (confirmarImpreso) -- si no se corrigen aqui tambien, "Notificar a"
+      // en el detalle sigue mostrando el nombre viejo aunque el trabajo
+      // individual ya haya quedado bien.
+      if (sol) {
+        const patchSol = {};
+        if (Array.isArray(sol.destinatarios)) {
+          patchSol.destinatarios = sol.destinatarios.map(d => {
+            const email  = typeof d === 'string' ? d : d.email;
+            const nombre = typeof d === 'string' ? d : d.nombre;
+            const esElViejo = (trabajoActual.destinatario_email && email === trabajoActual.destinatario_email)
+              || (!trabajoActual.destinatario_email && nombre === trabajoActual.profesor);
+            return esElViejo ? { nombre: elegido.nombre, email: elegido.email } : d;
+          });
+        }
+        if (sol.profesor === trabajoActual.profesor) patchSol.profesor = elegido.nombre;
+        if (sol.email_destino && sol.email_destino === trabajoActual.destinatario_email) patchSol.email_destino = elegido.email || null;
+        if (Object.keys(patchSol).length) {
+          await _sb.from('bib_solicitudes').update(patchSol).eq('id', solicitudId);
+        }
+      }
 
       const avisos = [];
       if (trabajoActual.destinatario_email && trabajoActual.destinatario_email !== elegido.email) {
