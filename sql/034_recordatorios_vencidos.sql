@@ -108,8 +108,8 @@ SELECT
   (SELECT count(*) FROM bib_auditoria WHERE resultado = 'error' AND ocurrido_en > now() - interval '7 days') AS errores_7d,
   (SELECT count(*) FROM bib_auditoria WHERE gravedad = 'critico' AND ocurrido_en > now() - interval '7 days') AS criticos_7d,
 
-  (SELECT count(*) FROM bib_documentos) AS storage_archivos,
-  (SELECT coalesce(sum(tamano_bytes), 0) FROM bib_documentos) AS storage_bytes,
+  (SELECT archivos FROM bib_fn_storage_stats()) AS storage_archivos,
+  (SELECT bytes     FROM bib_fn_storage_stats()) AS storage_bytes,
 
   (SELECT max(ocurrido_en) FROM bib_auditoria WHERE modulo = 'recordatorios' AND accion = 'recordar_confirmaciones') AS ultimo_recordatorio_copias,
   (SELECT resultado FROM bib_auditoria WHERE modulo = 'recordatorios' AND accion = 'recordar_confirmaciones' ORDER BY ocurrido_en DESC LIMIT 1) AS ultimo_recordatorio_copias_resultado,
@@ -123,4 +123,8 @@ SELECT
   (SELECT max(ocurrido_en) FROM bib_auditoria WHERE modulo = 'recordatorios' AND accion = 'solicitudes_estancadas') AS ultimo_recordatorio_estancadas,
   (SELECT resultado FROM bib_auditoria WHERE modulo = 'recordatorios' AND accion = 'solicitudes_estancadas' ORDER BY ocurrido_en DESC LIMIT 1) AS ultimo_recordatorio_estancadas_resultado;
 
+-- CREATE OR REPLACE VIEW no reinicia opciones de vista de forma confiable
+-- entre versiones de Postgres -- se reafirma explicitamente (mismo valor
+-- que ya dejo 030_fix_security_advisor_errores.sql, solo por seguridad).
+ALTER VIEW bib_vista_salud SET (security_invoker = on);
 GRANT SELECT ON bib_vista_salud TO authenticated;
