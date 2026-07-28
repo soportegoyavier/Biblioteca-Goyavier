@@ -20,6 +20,16 @@ function _cfg(key) {
 // ── Único correo autorizado a operar la app y a llamar este backend ──
 var CORREO_AUTORIZADO = 'biblioteca@colegiogoyavier.edu.co';
 
+// ── URL del Web App para los links de confirmación en correos ──
+// Debe coincidir SIEMPRE con GAS_URL en js/config.js. NO usar
+// ScriptApp.getService().getUrl(): esa llamada solo devuelve la URL
+// correcta del deployment cuando corre dentro de una petición web real
+// (doGet en vivo); desde un trigger por tiempo (recordatorios automáticos)
+// devuelve una URL de deployment distinta/desactualizada y los links de
+// confirmación quedan rotos (ver recordatorio_entregas, que sí corre
+// desde trigger a diferencia de los correos de entrega en vivo).
+var WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbywOPXKEYBeM7KaAUrdPaExW0EWAHH3tLVg0gfhm2--iavwWuuIGiEOkTh7R5EYqyLd/exec';
+
 // Valida el access_token de la sesión de Supabase Auth contra el propio
 // Supabase (no es un secreto estatico: es el JWT real de quien esta
 // logueado en el frontend, verificado en cada llamada). Sin esto, la URL
@@ -660,7 +670,7 @@ function enviarCorreo(params) {
 
       case "entregado":
         asunto = "Impresion entregada con exito! :) - " + ref;
-        var _gasUrl      = ScriptApp.getService().getUrl();
+        var _gasUrl      = WEBAPP_URL;
         // trabajoId (entrega por destinatario, js/copias.js) tiene prioridad; solicitudUuid
         // se mantiene como fallback para el flujo de Ventas (js/ventas.js), que sigue
         // entregando la solicitud completa y no manda trabajoId.
@@ -786,7 +796,7 @@ function enviarCorreo(params) {
 
       case "recordatorio_entregas":
         asunto = "Tienes entregas pendientes de confirmar - Biblioteca";
-        var _gasUrlRec = ScriptApp.getService().getUrl();
+        var _gasUrlRec = WEBAPP_URL;
         var _bloquesRec = (params.entregas || []).map(function(en) {
           var _cUrl = _gasUrlRec + '?accion=confirmarRecepcionTrabajo&sid=' + encodeURIComponent(en.trabajo_id);
           var _archsRec = (en.archivos || []).map(function(a) {
@@ -814,7 +824,7 @@ function enviarCorreo(params) {
 
       case "movimiento_entregado":
         var tipoMovLbl = { prestamo: "Prestamo", asignacion: "Asignacion permanente", consumo: "Entrega / Consumo" };
-        var _confirmUrlMat  = ScriptApp.getService().getUrl() + '?accion=confirmarRecepcionMaterial&sid=' + encodeURIComponent(params.movimientoId || '');
+        var _confirmUrlMat  = WEBAPP_URL + '?accion=confirmarRecepcionMaterial&sid=' + encodeURIComponent(params.movimientoId || '');
         var _botonConfirmMat = params.movimientoId
           ? '<div style="text-align:center;margin:24px 0">' +
             '<a href="' + _confirmUrlMat + '" style="display:inline-block;background:#6f42c1;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí el material</a>' +
@@ -904,7 +914,7 @@ function enviarCorreo(params) {
         var _fechaLimLbl = params.esInstitucional
           ? "Sin fecha fija - uso durante el año escolar"
           : (params.fechaLimite || "-");
-        var _confirmUrlLib  = ScriptApp.getService().getUrl() + '?accion=confirmarRecepcionLibro&sid=' + encodeURIComponent(params.prestamoId || '');
+        var _confirmUrlLib  = WEBAPP_URL + '?accion=confirmarRecepcionLibro&sid=' + encodeURIComponent(params.prestamoId || '');
         var _botonConfirmLib = params.prestamoId
           ? '<div style="text-align:center;margin:24px 0">' +
             '<a href="' + _confirmUrlLib + '" style="display:inline-block;background:#2c7be5;color:#ffffff;padding:13px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:14px">&#10003; Confirmar que recibí el libro</a>' +
