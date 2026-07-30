@@ -793,25 +793,29 @@ async function _actualizarCopiasZaiko() {
   if (!titulo) { wrap.style.display = 'none'; return; }
 
   wrap.style.display = '';
-  sel.innerHTML = '<option value="">Consultando Zaiko…</option>';
-  hint.textContent = '';
+  sel.style.display = 'none';
+  sel.innerHTML = '';
+  hint.textContent = 'Consultando Zaiko…';
   try {
     const r = await gasCall('zaikoListarCopiasLibro', { titulo });
     if (!r.ok) throw new Error(r.msg || 'Error desconocido');
     const disponibles = (r.copias || []).filter(c => c.estado_activo === 'ACTIVO');
     _zaikoCopiasDisponibles = disponibles;
     if (!r.copias.length) {
-      sel.innerHTML = '<option value="">— Sin copias catalogadas en Zaiko —</option>';
       hint.textContent = 'Este título aún no tiene ejemplares registrados en el inventario oficial. El préstamo se guardará en Biblioteca igual, sin reflejarse en Zaiko.';
     } else if (!disponibles.length) {
-      sel.innerHTML = '<option value="">— Sin copias disponibles —</option>';
       hint.textContent = 'Todas las copias catalogadas de este título están prestadas o no disponibles en Zaiko.';
+    } else if (disponibles.length === 1) {
+      // Una sola copia — se asigna sola, sin mostrar un desplegable de una
+      // sola opción (ruido visual innecesario).
+      sel.innerHTML = `<option value="${escHtml(disponibles[0].id_activo)}" selected>${escHtml(disponibles[0].id_activo)}</option>`;
+      hint.textContent = 'Se usará automáticamente la copia ' + disponibles[0].id_activo + ' del inventario oficial.';
     } else {
       sel.innerHTML = disponibles.map(c => `<option value="${escHtml(c.id_activo)}">${escHtml(c.id_activo)}</option>`).join('');
-      hint.textContent = disponibles.length + ' copia(s) disponible(s) en el inventario oficial.';
+      sel.style.display = '';
+      hint.textContent = 'Elige cuál de las ' + disponibles.length + ' copias disponibles se presta.';
     }
   } catch (e) {
-    sel.innerHTML = '<option value="">— No se pudo consultar Zaiko —</option>';
     hint.textContent = 'No se pudo consultar el inventario oficial (' + e.message + '). El préstamo se guardará en Biblioteca igual.';
   }
 }
