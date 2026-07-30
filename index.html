@@ -1197,7 +1197,7 @@
 
       <div class="fgroup" style="position:relative">
         <label>Libro <span class="req">*</span></label>
-        <input type="text" id="npl-libro-titulo" class="fc" placeholder="Buscar o escribir título..." oninput="libroBuscarDebounce()" autocomplete="off">
+        <input type="text" id="npl-libro-titulo" class="fc" placeholder="Buscar o escribir título..." oninput="libroBuscarDebounce()" onblur="_actualizarCopiasZaiko()" autocomplete="off">
         <div id="npl-libro-sugerencias" class="ss-panel" style="top:62px"></div>
       </div>
       <div class="fg c3">
@@ -1213,6 +1213,12 @@
           <label>Código</label>
           <input type="text" id="npl-libro-codigo" class="fc" placeholder="Opcional">
         </div>
+      </div>
+
+      <div class="fgroup" id="npl-zaiko-wrap" style="display:none">
+        <label>Copia en Zaiko (inventario oficial)</label>
+        <select class="fc" id="npl-zaiko-copia"></select>
+        <p id="npl-zaiko-hint" style="font-size:12px;color:var(--muted);margin-top:4px"></p>
       </div>
 
       <div class="fgroup" id="npl-fecha-wrap">
@@ -1271,7 +1277,7 @@
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>
 <script src="js/colaboradores.js?v=9"></script>
-<script src="js/materiales.js?v=3"></script>
+<script src="js/materiales.js?v=4"></script>
 <script src="js/auditoria.js?v=5"></script>
 <script src="js/modals.js?v=10"></script>
 </body>

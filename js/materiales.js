@@ -531,8 +531,30 @@ async function confirmarDevolucionMovimiento() {
         fecha_devolucion_real: ahora,
         usuario_recibio_devolucion: usuario,
         notas_devolucion: obs || null,
-      }).eq('id', _movDevolverId).select('id_prestamo,libro_titulo,prestatario_email').single();
+      }).eq('id', _movDevolverId).select('id_prestamo,libro_titulo,prestatario_email,zaiko_activo_id,zaiko_sync_estado').single();
       if (errLib) throw errLib;
+
+      // Espejo best-effort hacia Zaiko — solo si el préstamo sí se reflejó allá.
+      if (lib.zaiko_activo_id && lib.zaiko_sync_estado === 'SINCRONIZADO') {
+        try {
+          const rz = await gasCall('zaikoDevolver', {
+            idPrestamo: lib.id_prestamo,
+            condicion: 'BUENO',
+            obs: obs || '',
+          });
+          if (!rz.ok) {
+            await _sb.from('bib_prestamos_libros').update({
+              zaiko_sync_estado: 'ERROR',
+              zaiko_sync_detalle: 'Devolución no reflejada: ' + (rz.msg || 'error desconocido'),
+            }).eq('id', _movDevolverId);
+          }
+        } catch (ze) {
+          await _sb.from('bib_prestamos_libros').update({
+            zaiko_sync_estado: 'ERROR',
+            zaiko_sync_detalle: 'Devolución no reflejada: ' + ze.message,
+          }).eq('id', _movDevolverId);
+        }
+      }
 
       if (lib.prestatario_email) {
         gasCall('enviarCorreo', {
@@ -748,7 +770,50 @@ function abrirModalPrestamoLibro() {
   document.getElementById('npl-fecha-lim').value = '';
   document.getElementById('npl-obs').value = '';
   onCambioTipoPrestatario();
+  _zaikoCopiasDisponibles = [];
+  document.getElementById('npl-zaiko-wrap').style.display = 'none';
+  document.getElementById('npl-zaiko-copia').innerHTML = '';
+  document.getElementById('npl-zaiko-hint').textContent = '';
   document.getElementById('modal-prestamo-libro').classList.add('open');
+}
+
+// ── PUENTE ZAIKO (espejo best-effort — ver plan de integración) ────────
+// Biblioteca sigue siendo la fuente primaria de sus propios préstamos;
+// esto solo refleja el movimiento hacia el inventario oficial. Si Zaiko
+// no responde o el título no está catalogado ahí, el préstamo local se
+// guarda igual — solo queda marcado como pendiente de sincronizar.
+let _zaikoCopiasDisponibles = [];
+
+async function _actualizarCopiasZaiko() {
+  const titulo = document.getElementById('npl-libro-titulo').value.trim();
+  const wrap = document.getElementById('npl-zaiko-wrap');
+  const sel  = document.getElementById('npl-zaiko-copia');
+  const hint = document.getElementById('npl-zaiko-hint');
+  _zaikoCopiasDisponibles = [];
+  if (!titulo) { wrap.style.display = 'none'; return; }
+
+  wrap.style.display = '';
+  sel.innerHTML = '<option value="">Consultando Zaiko…</option>';
+  hint.textContent = '';
+  try {
+    const r = await gasCall('zaikoListarCopiasLibro', { titulo });
+    if (!r.ok) throw new Error(r.msg || 'Error desconocido');
+    const disponibles = (r.copias || []).filter(c => c.estado_activo === 'ACTIVO');
+    _zaikoCopiasDisponibles = disponibles;
+    if (!r.copias.length) {
+      sel.innerHTML = '<option value="">— Sin copias catalogadas en Zaiko —</option>';
+      hint.textContent = 'Este título aún no tiene ejemplares registrados en el inventario oficial. El préstamo se guardará en Biblioteca igual, sin reflejarse en Zaiko.';
+    } else if (!disponibles.length) {
+      sel.innerHTML = '<option value="">— Sin copias disponibles —</option>';
+      hint.textContent = 'Todas las copias catalogadas de este título están prestadas o no disponibles en Zaiko.';
+    } else {
+      sel.innerHTML = disponibles.map(c => `<option value="${escHtml(c.id_activo)}">${escHtml(c.id_activo)}</option>`).join('');
+      hint.textContent = disponibles.length + ' copia(s) disponible(s) en el inventario oficial.';
+    }
+  } catch (e) {
+    sel.innerHTML = '<option value="">— No se pudo consultar Zaiko —</option>';
+    hint.textContent = 'No se pudo consultar el inventario oficial (' + e.message + '). El préstamo se guardará en Biblioteca igual.';
+  }
 }
 
 function onCambioTipoPrestatario() {
@@ -805,6 +870,7 @@ function _seleccionarLibroSugerido(id) {
   if (l.area)      document.getElementById('npl-libro-area').value = l.area;
   if (l.codigo)    document.getElementById('npl-libro-codigo').value = l.codigo;
   document.getElementById('npl-libro-sugerencias').style.display = 'none';
+  _actualizarCopiasZaiko();
 }
 
 async function obtenerOCrearLibro(titulo, editorial, area, codigo) {
@@ -866,6 +932,35 @@ async function guardarPrestamoLibro() {
     }).select('id').single();
     if (error) throw error;
 
+    // Espejo best-effort hacia Zaiko — no bloquea el préstamo si falla.
+    const copiaSel = document.getElementById('npl-zaiko-copia')?.value || '';
+    if (copiaSel) {
+      try {
+        const rz = await gasCall('zaikoPrestar', {
+          idPrestamo: idGenerado,
+          idActivo: copiaSel,
+          tituloLibro: titulo,
+          prestatarioNombre,
+          prestatarioEmail,
+          tipoPrestatario: tipo,
+          fechaPrestamo: new Date().toISOString(),
+          fechaLimite: fechaLim || null,
+          usuario,
+        });
+        await _sb.from('bib_prestamos_libros').update({
+          zaiko_activo_id: copiaSel,
+          zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
+          zaiko_sync_detalle: rz.ok ? null : (rz.msg || 'Error desconocido'),
+        }).eq('id', prestamo.id);
+      } catch (ze) {
+        await _sb.from('bib_prestamos_libros').update({
+          zaiko_activo_id: copiaSel,
+          zaiko_sync_estado: 'ERROR',
+          zaiko_sync_detalle: ze.message,
+        }).eq('id', prestamo.id);
+      }
+    }
+
     if (prestatarioEmail) {
       gasCall('enviarCorreo', {
         tipo: 'libro_prestado',
@@ -903,6 +998,11 @@ async function abrirDetalleLibro(id) {
     const tipoLbl = { estudiante:'Estudiante', colaborador:'Colaborador', institucional:'Institucional (docente)' };
     const esAbierto = !lib.fecha_devolucion_real;
     const libroInfo = lib.bib_libros || {};
+    const zaikoLbl = lib.zaiko_sync_estado === 'SINCRONIZADO'
+      ? `<span style="color:var(--green);font-weight:600">✓ Reflejado (${escHtml(lib.zaiko_activo_id || '')})</span>`
+      : lib.zaiko_sync_estado === 'ERROR'
+        ? `<span style="color:var(--red);font-weight:600" title="${escHtml(lib.zaiko_sync_detalle || '')}">⚠️ No reflejado en Zaiko</span>`
+        : `<span style="color:var(--muted)">— Sin copia en Zaiko —</span>`;
 
     body.innerHTML = `
       <table style="width:100%;font-size:13px;margin-bottom:16px">
@@ -913,6 +1013,7 @@ async function abrirDetalleLibro(id) {
         <tr><td style="color:var(--muted);padding:4px 0">Tipo</td><td>${tipoLbl[lib.tipo_prestatario] || lib.tipo_prestatario}</td></tr>
         <tr><td style="color:var(--muted);padding:4px 0">Prestatario</td><td>${escHtml(lib.prestatario_nombre)}${lib.prestatario_curso ? ' · ' + escHtml(lib.prestatario_curso) : ''}${lib.prestatario_email ? ' (' + escHtml(lib.prestatario_email) + ')' : ''}</td></tr>
         <tr><td style="color:var(--muted);padding:4px 0">Registrado por</td><td>${escHtml(lib.usuario_registro || '—')} · ${fmtFecha(lib.fecha_prestamo)}</td></tr>
+        <tr><td style="color:var(--muted);padding:4px 0">Inventario Zaiko</td><td>${zaikoLbl}</td></tr>
         ${lib.prestatario_email ? `<tr><td style="color:var(--muted);padding:4px 0">Confirmación</td><td>${lib.recepcion_confirmada
           ? `<span style="color:var(--green);font-weight:600">✓ Confirmado${lib.recepcion_confirmada_en ? ' · ' + fmtFecha(lib.recepcion_confirmada_en) : ''}</span>`
           : `<span style="font-size:12px;color:var(--muted)">Pendiente</span>

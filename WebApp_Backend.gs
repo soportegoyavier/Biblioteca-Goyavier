@@ -109,7 +109,132 @@ function despachar(p) {
     case "eliminarSolicitud":      return _eliminarSolicitud(p.id, p.motivo);
     case "archivarAdjuntosAntiguos": return archivarAdjuntosAntiguos();
     case "responderCorreo":        return _responderCorreo(p.gmailMessageId, p.mensaje);
+    case "zaikoListarCopiasLibro": return zaikoListarCopiasLibro(p);
+    case "zaikoPrestar":           return zaikoPrestar(p);
+    case "zaikoDevolver":          return zaikoDevolver(p);
     default: return { error: "Acción no reconocida: " + p.accion };
+  }
+}
+
+// ============================================================
+// PUENTE ZAIKO — inventario oficial de activos del colegio
+// ============================================================
+// Config requerida en Script Properties (Configuración del proyecto →
+// Propiedades del script), NUNCA en este archivo ni en el navegador:
+//   ZAIKO_API_URL          → https://uimmarckhwnsrlkiexgs.supabase.co/functions/v1/zaiko-api
+//   ZAIKO_SERVICIO_EMAIL   → soporte@colegiogoyavier.edu.co
+//   ZAIKO_SERVICIO_PASSWORD → contraseña de la cuenta de servicio SERVICIO-BIBLIOTECA
+//
+// Biblioteca sigue siendo la fuente primaria de sus propios datos
+// (bib_prestamos_libros no cambia su comportamiento) — esto es un espejo
+// best-effort hacia Zaiko. Si algo aquí falla, se devuelve {ok:false,...}
+// y quien llama (materiales.js) debe seguir funcionando igual, solo
+// marcando ese préstamo como pendiente de sincronizar.
+
+function _zaikoToken() {
+  var cache = CacheService.getScriptCache();
+  var tok = cache.get('ZAIKO_JWT');
+  if (tok) return tok;
+
+  var url   = _cfg('ZAIKO_API_URL');
+  var email = _cfg('ZAIKO_SERVICIO_EMAIL');
+  var pass  = _cfg('ZAIKO_SERVICIO_PASSWORD');
+  if (!url || !email || !pass) throw new Error('Puente Zaiko sin configurar (Script Properties)');
+
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ action: 'fn_login', p_email: email, p_password: pass }),
+    muteHttpExceptions: true
+  });
+  var data = JSON.parse(res.getContentText());
+  if (!data || !data.ok || !data.token) {
+    throw new Error('Login a Zaiko falló: ' + (data && data.msg ? data.msg : res.getContentText()));
+  }
+
+  // El JWT de Zaiko dura 7 días — se cachea 6 como margen de seguridad.
+  cache.put('ZAIKO_JWT', data.token, 6 * 24 * 60 * 60);
+  return data.token;
+}
+
+function _zaikoCall(action, params, esReintento) {
+  var url = _cfg('ZAIKO_API_URL');
+  var token = _zaikoToken();
+  var body = Object.assign({ action: action }, params || {});
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true
+  });
+  var status = res.getResponseCode();
+  var data;
+  try { data = JSON.parse(res.getContentText()); } catch (e) { data = { error: res.getContentText() }; }
+
+  // Token vencido/inválido — reintenta una sola vez con login fresco.
+  if (status === 401 && !esReintento) {
+    CacheService.getScriptCache().remove('ZAIKO_JWT');
+    return _zaikoCall(action, params, true);
+  }
+  if (data && data.error) return { ok: false, msg: data.error };
+  return data;
+}
+
+// Copias de un título específico ya catalogadas en Zaiko, con su estado
+// actual (disponible / prestado / etc.) para que el bibliotecario elija
+// cuál prestar. Filtra por nombre + subcategoría de libro en el propio
+// backend, no en el cliente.
+function zaikoListarCopiasLibro(p) {
+  try {
+    var titulo = (p.titulo || '').trim().toUpperCase();
+    if (!titulo) return { ok: false, msg: 'Falta el título' };
+    var r = _zaikoCall('fn_listar_activos_biblioteca', {});
+    if (!Array.isArray(r)) return { ok: false, msg: (r && r.msg) || 'No se pudo consultar Zaiko' };
+    var LIBRO_SUBCATS = { 'LIBROS': true, 'TEXTOS ESCOLARES': true };
+    var copias = r.filter(function (a) {
+      return (a.nombre || '').toUpperCase() === titulo &&
+        LIBRO_SUBCATS[(a.subcategoria || '').toUpperCase()];
+    });
+    return { ok: true, copias: copias };
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+function zaikoPrestar(p) {
+  try {
+    var fila = {
+      id_prestamo: p.idPrestamo,
+      id_activo: p.idActivo,
+      nombre_activo: p.tituloLibro,
+      categoria: 'BIBLIOTECA',
+      colaborador: p.prestatarioNombre,
+      motivo: 'PRESTAMO DE LIBRO - BIBLIOTECA',
+      observaciones: 'Tipo prestatario: ' + (p.tipoPrestatario || '') +
+        (p.prestatarioEmail ? ' (' + p.prestatarioEmail + ')' : ''),
+      fecha_prestamo: p.fechaPrestamo,
+      estado_prestamo: 'ACTIVO',
+      espacio_origen: 'A-BIB-I',
+      responsable_original: 'JHOHAN SEBASTIAN GARCIA GOMEZ',
+      usuario_prestamo: 'BIBLIOTECA (' + (p.usuario || 'sistema') + ')'
+    };
+    if (p.fechaLimite) fila.fecha_dev_estimada = p.fechaLimite;
+    return _zaikoCall('fn_insertar_prestamo_biblioteca', { p_fila: fila });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+function zaikoDevolver(p) {
+  try {
+    return _zaikoCall('fn_devolver_prestamo_biblioteca', {
+      p_id: p.idPrestamo,
+      p_condicion: p.condicion || 'BUENO',
+      p_obs: p.obs || ''
+    });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
   }
 }
 
