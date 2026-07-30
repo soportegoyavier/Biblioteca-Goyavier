@@ -181,28 +181,18 @@ function _zaikoCall(action, params, esReintento) {
   return data;
 }
 
-// Sin tildes/diacríticos, mayúsculas, sin espacios sobrantes — para
-// comparar títulos sin que "Matemáticas" y "MATEMATICAS" (como quedó
-// guardado el dato original) se traten como distintos.
-function _normalizarTexto(s) {
-  return (s || '').toString().trim().toUpperCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-// Copias de un título específico ya catalogadas en Zaiko, con su estado
-// actual (disponible / prestado / etc.) para que el bibliotecario elija
-// cuál prestar. Filtra por nombre + subcategoría de libro en el propio
-// backend, no en el cliente.
+// Todas las copias de libro ya catalogadas en Zaiko (categoria
+// biblioteca, subcategoria Libros/Textos escolares), con su estado
+// actual. Se trae TODO de una sola vez -- el filtrado por titulo
+// mientras el bibliotecario escribe se hace en el propio navegador
+// (materiales.js), sin otro viaje de red por cada letra que escribe.
 function zaikoListarCopiasLibro(p) {
   try {
-    var titulo = _normalizarTexto(p.titulo);
-    if (!titulo) return { ok: false, msg: 'Falta el título' };
     var r = _zaikoCall('fn_listar_activos_biblioteca', {});
     if (!Array.isArray(r)) return { ok: false, msg: (r && r.msg) || 'No se pudo consultar Zaiko' };
     var LIBRO_SUBCATS = { 'LIBROS': true, 'TEXTOS ESCOLARES': true };
     var copias = r.filter(function (a) {
-      return _normalizarTexto(a.nombre) === titulo &&
-        LIBRO_SUBCATS[(a.subcategoria || '').toUpperCase()];
+      return LIBRO_SUBCATS[(a.subcategoria || '').toUpperCase()];
     });
     return { ok: true, copias: copias };
   } catch (e) {

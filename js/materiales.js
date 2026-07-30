@@ -771,10 +771,12 @@ function abrirModalPrestamoLibro() {
   document.getElementById('npl-obs').value = '';
   onCambioTipoPrestatario();
   _zaikoCopiasDisponibles = [];
+  _zaikoLibrosCache = null;
   document.getElementById('npl-zaiko-wrap').style.display = 'none';
   document.getElementById('npl-zaiko-copia').innerHTML = '';
   document.getElementById('npl-zaiko-hint').textContent = '';
   document.getElementById('modal-prestamo-libro').classList.add('open');
+  _cargarCatalogoZaikoLibros();
 }
 
 // ── PUENTE ZAIKO (espejo best-effort — ver plan de integración) ────────
@@ -782,9 +784,32 @@ function abrirModalPrestamoLibro() {
 // esto solo refleja el movimiento hacia el inventario oficial. Si Zaiko
 // no responde o el título no está catalogado ahí, el préstamo local se
 // guarda igual — solo queda marcado como pendiente de sincronizar.
+//
+// El catálogo completo de libros de Zaiko se trae UNA sola vez al abrir
+// el modal; mientras el bibliotecario escribe el título, el filtrado es
+// local (sin otro viaje de red por cada letra).
+let _zaikoLibrosCache = null;       // null = aún no cargado; [] = cargado, vacío
 let _zaikoCopiasDisponibles = [];
 
-async function _actualizarCopiasZaiko() {
+function _normalizarTextoJS(s) {
+  return (s || '').toString().trim().toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+async function _cargarCatalogoZaikoLibros() {
+  try {
+    const r = await gasCall('zaikoListarCopiasLibro', {});
+    _zaikoLibrosCache = r.ok ? (r.copias || []) : [];
+    if (!r.ok) console.warn('No se pudo cargar el catálogo de Zaiko:', r.msg);
+  } catch (e) {
+    _zaikoLibrosCache = [];
+    console.warn('No se pudo cargar el catálogo de Zaiko:', e.message);
+  }
+  // Si el bibliotecario ya empezó a escribir mientras esto cargaba, refresca.
+  _actualizarCopiasZaiko();
+}
+
+function _actualizarCopiasZaiko() {
   const titulo = document.getElementById('npl-libro-titulo').value.trim();
   const wrap = document.getElementById('npl-zaiko-wrap');
   const sel  = document.getElementById('npl-zaiko-copia');
@@ -795,28 +820,30 @@ async function _actualizarCopiasZaiko() {
   wrap.style.display = '';
   sel.style.display = 'none';
   sel.innerHTML = '';
-  hint.textContent = 'Consultando Zaiko…';
-  try {
-    const r = await gasCall('zaikoListarCopiasLibro', { titulo });
-    if (!r.ok) throw new Error(r.msg || 'Error desconocido');
-    const disponibles = (r.copias || []).filter(c => c.estado_activo === 'ACTIVO');
-    _zaikoCopiasDisponibles = disponibles;
-    if (!r.copias.length) {
-      hint.textContent = 'Este título aún no tiene ejemplares registrados en el inventario oficial. El préstamo se guardará en Biblioteca igual, sin reflejarse en Zaiko.';
-    } else if (!disponibles.length) {
-      hint.textContent = 'Todas las copias catalogadas de este título están prestadas o no disponibles en Zaiko.';
-    } else if (disponibles.length === 1) {
-      // Una sola copia — se asigna sola, sin mostrar un desplegable de una
-      // sola opción (ruido visual innecesario).
-      sel.innerHTML = `<option value="${escHtml(disponibles[0].id_activo)}" selected>${escHtml(disponibles[0].id_activo)}</option>`;
-      hint.textContent = 'Se usará automáticamente la copia ' + disponibles[0].id_activo + ' del inventario oficial.';
-    } else {
-      sel.innerHTML = disponibles.map(c => `<option value="${escHtml(c.id_activo)}">${escHtml(c.id_activo)}</option>`).join('');
-      sel.style.display = '';
-      hint.textContent = 'Elige cuál de las ' + disponibles.length + ' copias disponibles se presta.';
-    }
-  } catch (e) {
-    hint.textContent = 'No se pudo consultar el inventario oficial (' + e.message + '). El préstamo se guardará en Biblioteca igual.';
+
+  if (_zaikoLibrosCache === null) {
+    hint.textContent = 'Consultando Zaiko…';
+    return; // _cargarCatalogoZaikoLibros() vuelve a llamar esta función al terminar.
+  }
+
+  const tituloNorm = _normalizarTextoJS(titulo);
+  const coincidencias = _zaikoLibrosCache.filter(c => _normalizarTextoJS(c.nombre) === tituloNorm);
+  const disponibles = coincidencias.filter(c => c.estado_activo === 'ACTIVO');
+  _zaikoCopiasDisponibles = disponibles;
+
+  if (!coincidencias.length) {
+    hint.textContent = 'Este título aún no tiene ejemplares registrados en el inventario oficial. El préstamo se guardará en Biblioteca igual, sin reflejarse en Zaiko.';
+  } else if (!disponibles.length) {
+    hint.textContent = 'Todas las copias catalogadas de este título están prestadas o no disponibles en Zaiko.';
+  } else if (disponibles.length === 1) {
+    // Una sola copia — se asigna sola, sin mostrar un desplegable de una
+    // sola opción (ruido visual innecesario).
+    sel.innerHTML = `<option value="${escHtml(disponibles[0].id_activo)}" selected>${escHtml(disponibles[0].id_activo)}</option>`;
+    hint.textContent = 'Se usará automáticamente la copia ' + disponibles[0].id_activo + ' del inventario oficial.';
+  } else {
+    sel.innerHTML = disponibles.map(c => `<option value="${escHtml(c.id_activo)}">${escHtml(c.id_activo)}</option>`).join('');
+    sel.style.display = '';
+    hint.textContent = 'Elige cuál de las ' + disponibles.length + ' copias disponibles se presta.';
   }
 }
 
@@ -842,7 +869,10 @@ function elegirColaboradorLibro() {
 
 function libroBuscarDebounce() {
   clearTimeout(_libBuscarTimer);
-  _libBuscarTimer = setTimeout(_renderSugerenciasLibro, 200);
+  _libBuscarTimer = setTimeout(() => {
+    _renderSugerenciasLibro();
+    _actualizarCopiasZaiko(); // filtrado local sobre _zaikoLibrosCache, sin red
+  }, 200);
 }
 
 async function _renderSugerenciasLibro() {
