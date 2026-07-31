@@ -1167,22 +1167,29 @@
         Agrega los materiales que quieres registrar en Zaiko con la cantidad contada.
         Los que dejes en blanco o en 0 quedan igual registrados, marcados como AGOTADO. No se toca nada que ya exista en Zaiko.
       </p>
-      <div style="max-height:50vh;overflow-y:auto">
-        <table style="width:100%;border-collapse:collapse">
-          <thead>
-            <tr style="position:sticky;top:0;background:var(--bg-card,#1a1a2e)">
-              <th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted)">Material</th>
-              <th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);width:110px">Unidad</th>
-              <th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);width:100px">Cantidad</th>
-              <th style="width:32px"></th>
-            </tr>
-          </thead>
-          <tbody id="conteo-zaiko-tbody"></tbody>
-        </table>
+      <div class="fgroup">
+        <div id="cz-lista" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;position:relative">
+          <input type="text" id="cz-mat-nombre" class="fc" placeholder="Buscar o escribir material..." style="flex:2 1 200px" oninput="czBuscarDebounce()" autocomplete="off">
+          <input type="number" id="cz-mat-cantidad" class="fc" placeholder="Cant." style="flex:1 1 80px" min="0" step="any">
+          <input type="text" id="cz-mat-unidad" class="fc" placeholder="Unidad" style="flex:1 1 90px" value="Unidad">
+          <button class="btn btn-ghost" onclick="agregarLineaConteoZaiko()"><i class="fa fa-plus fa-sm"></i></button>
+          <div id="cz-mat-sugerencias" class="ss-panel" style="top:38px;width:100%"></div>
+        </div>
+        <button type="button" class="picker-agregar-btn" onclick="toggleCzMatExtra()">
+          <i id="cz-mat-extra-ico" class="fa fa-plus fa-xs"></i> Detalles adicionales (marca, color, tamaño...)
+        </button>
+        <div id="cz-mat-extra" style="display:none;margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px">
+          <input type="text" id="cz-mat-marca" class="fc" placeholder="Marca" style="margin:0">
+          <input type="text" id="cz-mat-color" class="fc" placeholder="Color" style="margin:0">
+          <input type="text" id="cz-mat-tamano" class="fc" placeholder="Tamaño" style="margin:0">
+          <input type="text" id="cz-mat-presentacion" class="fc" placeholder="Presentación" style="margin:0">
+        </div>
       </div>
-      <button class="btn btn-ghost" style="margin-top:8px" onclick="agregarFilaConteoZaiko()">
-        <i class="fa fa-plus fa-sm"></i> Agregar material
-      </button>
+      <div class="fgroup">
+        <label>Observaciones</label>
+        <textarea id="cz-mat-notas" class="fc" rows="2" placeholder="Notas adicionales..."></textarea>
+      </div>
     </div>
     <div class="mf">
       <button class="btn btn-ghost" onclick="cerrarModal('modal-conteo-zaiko')">Cancelar</button>
@@ -1316,7 +1323,7 @@
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>
 <script src="js/colaboradores.js?v=9"></script>
-<script src="js/materiales.js?v=8"></script>
+<script src="js/materiales.js?v=9"></script>
 <script src="js/auditoria.js?v=5"></script>
 <script src="js/modals.js?v=10"></script>
 </body>

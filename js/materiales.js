@@ -211,38 +211,130 @@ async function obtenerOCrearMaterial(nombre, unidadDefault) {
 // materiales que el usuario agregue aquí, con la cantidad contada.
 // No es un movimiento de Biblioteca ni depende del catálogo de
 // bib_materiales — es simplemente agregar uno o varios materiales
-// nuevos al conteo inicial de Zaiko.
+// nuevos al conteo inicial de Zaiko. Mismo patrón de línea-por-línea
+// (buscar/agregar + detalles adicionales) que "Nuevo movimiento".
+let _conteoZaikoTemp = [];
+let _czBuscarTimer;
+
 function abrirConteoZaiko() {
-  document.getElementById('conteo-zaiko-tbody').innerHTML = '';
-  agregarFilaConteoZaiko();
+  _conteoZaikoTemp = [];
+  document.getElementById('cz-mat-nombre').value = '';
+  document.getElementById('cz-mat-cantidad').value = '';
+  document.getElementById('cz-mat-unidad').value = 'Unidad';
+  document.getElementById('cz-mat-notas').value = '';
+  _limpiarCzMatExtra();
+  document.getElementById('cz-mat-extra').style.display = 'none';
+  document.getElementById('cz-mat-extra-ico').className = 'fa fa-plus fa-xs';
+  document.getElementById('cz-mat-sugerencias').style.display = 'none';
+  renderListaConteoZaiko();
   document.getElementById('modal-conteo-zaiko').classList.add('open');
 }
 
-function agregarFilaConteoZaiko() {
-  const tbody = document.getElementById('conteo-zaiko-tbody');
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td style="padding:6px 8px"><input class="fc" data-conteo-nombre placeholder="Nombre del material" style="margin:0;font-size:12px"></td>
-    <td style="padding:6px 8px"><input class="fc" data-conteo-unidad value="Unidad" style="margin:0;font-size:12px"></td>
-    <td style="padding:6px 8px"><input class="fc" type="number" min="0" step="any" data-conteo-cant placeholder="0" style="margin:0;font-size:12px"></td>
-    <td style="padding:6px 8px"><button class="btn-cls" onclick="this.closest('tr').remove()" title="Quitar"><i class="fa fa-xmark"></i></button></td>`;
-  tbody.appendChild(tr);
+function toggleCzMatExtra() {
+  const el  = document.getElementById('cz-mat-extra');
+  const ico = document.getElementById('cz-mat-extra-ico');
+  const abrir = el.style.display !== 'grid';
+  el.style.display = abrir ? 'grid' : 'none';
+  ico.className = abrir ? 'fa fa-minus fa-xs' : 'fa fa-plus fa-xs';
+}
+
+function _limpiarCzMatExtra() {
+  ['cz-mat-marca','cz-mat-color','cz-mat-tamano','cz-mat-presentacion']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+}
+
+function czBuscarDebounce() {
+  clearTimeout(_czBuscarTimer);
+  _czBuscarTimer = setTimeout(_renderSugerenciasConteoZaiko, 200);
+}
+
+function _renderSugerenciasConteoZaiko() {
+  const q = document.getElementById('cz-mat-nombre').value.trim();
+  const panel = document.getElementById('cz-mat-sugerencias');
+  if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  const low = q.toLowerCase();
+  const fil = _matCache.filter(m => m.activo && m.nombre.toLowerCase().includes(low)).slice(0, 8);
+  if (!fil.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.innerHTML = `<div class="ss-list">${fil.map(m => `
+    <div class="ss-opt" onclick="_seleccionarMaterialSugeridoConteo('${m.id}')">${escHtml(m.nombre)}</div>
+  `).join('')}</div>`;
+  panel.style.display = 'block';
+}
+
+function _seleccionarMaterialSugeridoConteo(id) {
+  const m = _matCache.find(x => String(x.id) === String(id));
+  if (!m) return;
+  document.getElementById('cz-mat-nombre').value = m.nombre;
+  if (m.unidad_medida_default) document.getElementById('cz-mat-unidad').value = m.unidad_medida_default;
+  if (m.marca)        document.getElementById('cz-mat-marca').value = m.marca;
+  if (m.color)        document.getElementById('cz-mat-color').value = m.color;
+  if (m.tamano)        document.getElementById('cz-mat-tamano').value = m.tamano;
+  if (m.presentacion)  document.getElementById('cz-mat-presentacion').value = m.presentacion;
+  document.getElementById('cz-mat-sugerencias').style.display = 'none';
+}
+
+function agregarLineaConteoZaiko() {
+  const nombre = document.getElementById('cz-mat-nombre').value.trim();
+  if (!nombre) { toast('Ingresa el nombre del material', 'error'); return; }
+  const cantidad = document.getElementById('cz-mat-cantidad').value;
+  const unidad   = document.getElementById('cz-mat-unidad').value.trim() || 'Unidad';
+  const marca        = document.getElementById('cz-mat-marca').value.trim();
+  const color         = document.getElementById('cz-mat-color').value.trim();
+  const tamano        = document.getElementById('cz-mat-tamano').value.trim();
+  const presentacion  = document.getElementById('cz-mat-presentacion').value.trim();
+  const notas         = document.getElementById('cz-mat-notas').value.trim();
+
+  _conteoZaikoTemp.push({
+    nombre, cantidad, unidad,
+    marca: marca || null, color: color || null, tamano: tamano || null,
+    presentacion: presentacion || null, notas: notas || null,
+  });
+
+  document.getElementById('cz-mat-nombre').value = '';
+  document.getElementById('cz-mat-cantidad').value = '';
+  document.getElementById('cz-mat-unidad').value = 'Unidad';
+  document.getElementById('cz-mat-notas').value = '';
+  _limpiarCzMatExtra();
+  document.getElementById('cz-mat-extra').style.display = 'none';
+  document.getElementById('cz-mat-extra-ico').className = 'fa fa-plus fa-xs';
+  document.getElementById('cz-mat-sugerencias').style.display = 'none';
+  renderListaConteoZaiko();
+}
+
+function quitarLineaConteoZaiko(idx) {
+  _conteoZaikoTemp.splice(idx, 1);
+  renderListaConteoZaiko();
+}
+
+function renderListaConteoZaiko() {
+  const el = document.getElementById('cz-lista');
+  if (!_conteoZaikoTemp.length) {
+    el.innerHTML = '<p style="font-size:12px;color:var(--muted)">Sin materiales agregados aún</p>';
+    return;
+  }
+  el.innerHTML = _conteoZaikoTemp.map((l, i) => {
+    const extra = [l.marca, l.color, l.tamano, l.presentacion].filter(Boolean).join(' · ');
+    const cant = l.cantidad === '' || l.cantidad === null || l.cantidad === undefined ? '0 (AGOTADO)' : `${l.cantidad} ${escHtml(l.unidad)}`;
+    return `
+    <div style="display:flex;align-items:center;gap:10px;background:var(--s3);border-radius:var(--radius-sm);padding:8px 12px">
+      <div style="flex:1;font-size:13px">
+        ${escHtml(l.nombre)} — <strong>${cant}</strong>
+        ${extra ? `<div style="font-size:11px;color:var(--muted)">${escHtml(extra)}</div>` : ''}
+        ${l.notas ? `<div style="font-size:11px;color:var(--muted)">${escHtml(l.notas)}</div>` : ''}
+      </div>
+      <button class="btn-cls" onclick="quitarLineaConteoZaiko(${i})" title="Quitar"><i class="fa fa-xmark fa-xs"></i></button>
+    </div>`;
+  }).join('');
 }
 
 async function guardarConteoZaiko() {
-  const items = Array.from(document.querySelectorAll('#conteo-zaiko-tbody tr')).map(tr => ({
-    nombre: tr.querySelector('[data-conteo-nombre]').value.trim(),
-    unidad: tr.querySelector('[data-conteo-unidad]').value.trim() || 'Unidad',
-    cantidad: tr.querySelector('[data-conteo-cant]').value,
-  })).filter(it => it.nombre);
-
-  if (!items.length) { toast('Agrega al menos un material con nombre', 'error'); return; }
+  if (!_conteoZaikoTemp.length) { toast('Agrega al menos un material', 'error'); return; }
 
   const btn = document.getElementById('btn-conteo-zaiko-guardar');
   btn.classList.add('loading'); btn.disabled = true;
   try {
     const usuario = await usuarioActualEmail();
-    const r = await gasCall('zaikoCargarConteo', { items, usuario });
+    const r = await gasCall('zaikoCargarConteo', { items: _conteoZaikoTemp, usuario });
     if (!r.ok) throw new Error(r.msg || 'Error desconocido');
     toast('✅ ' + r.creados + ' material(es) cargado(s) en Zaiko', 'success');
     cerrarModal('modal-conteo-zaiko');
