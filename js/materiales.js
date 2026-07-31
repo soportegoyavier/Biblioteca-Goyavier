@@ -1,7 +1,9 @@
 // ── MATERIALES Y PRÉSTAMOS ────────────────────────────────────
-// Este módulo NO es un inventario: solo registra movimientos (préstamo,
-// asignación permanente, consumo) sobre un catálogo local reutilizable
-// de materiales. El inventario oficial del colegio es Zaiko.
+// Este módulo NO es un inventario propio: registra movimientos (préstamo,
+// asignación permanente, consumo) sobre el catálogo real de materiales,
+// que vive en Zaiko (inventario oficial del colegio) — no en una tabla
+// local. bib_materiales sigue existiendo solo como detalle interno para
+// la FK de bib_movimiento_materiales, no se muestra ni se administra.
 
 // Resumen simple (sin marca/color/tamaño/presentación) para el correo de
 // devolución -- el detalle completo solo aplica al correo de entrega, que
@@ -130,70 +132,57 @@ function _badgePrestamo(r) {
   return badge('activo');
 }
 
-// ── CATÁLOGO DE MATERIALES ─────────────────────────────────────
+// ── CATÁLOGO DE MATERIALES (fuente: Zaiko) ─────────────────────
+// El catálogo real vive en Zaiko (inventario oficial, categoría
+// biblioteca) — esta pestaña es una vista de lo que ya existe allá,
+// no un catálogo propio de Biblioteca. "Agregar" abre el mismo flujo
+// que carga el conteo físico en Zaiko (abrirConteoZaiko): agregar un
+// material nuevo ES crearlo en Zaiko, sin importar si luego se usa
+// desde Biblioteca o directo en Zaiko.
+function _badgeEstadoZaikoMaterial(estado) {
+  const m = { ACTIVO: ['b-recibido', 'Activo'], AGOTADO: ['b-cancelado', 'Agotado'], 'DADO DE BAJA': ['b-cancelado', 'Dado de baja'] };
+  const [cls, txt] = m[estado] || ['b-pendiente', estado || '—'];
+  return `<span class="badge ${cls}">${txt}</span>`;
+}
+
 async function renderCatalogoMateriales(forzar = false) {
   const el = document.getElementById('mat-content');
   el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   try {
-    // Respeta la caché al solo navegar a la pestaña (ya la pudo haber
-    // poblado cargarMateriales()); forzar=true garantiza datos frescos
-    // justo después de escribir (agregar/activar/desactivar).
-    if (forzar || !_matCache.length) await _cargarMatCache();
-    let rows = _matCache;
+    if (forzar || _zaikoMaterialesCache === null) await _cargarCatalogoZaikoMateriales();
+    let rows = _zaikoMaterialesCache || [];
     if (_matFiltro) {
       const low = _matFiltro.toLowerCase();
-      rows = rows.filter(r => r.nombre.toLowerCase().includes(low));
+      rows = rows.filter(r => (r.nombre || '').toLowerCase().includes(low));
     }
     el.innerHTML = `
       <div class="sec-hdr"><div class="sec-title">Catálogo de materiales</div><div class="sec-hdr-line"></div></div>
       <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
-        Este catálogo no representa existencias — solo el listado de materiales conocidos por el sistema.
-        Se completa automáticamente al registrar movimientos, o puedes agregarlo aquí.
+        Este catálogo viene directo del inventario oficial de Zaiko — lo que agregues aquí se crea allá.
       </p>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
-        <input type="text" id="nuevo-material-inp" class="fc" placeholder="Nombre del material..." style="max-width:260px;margin:0"
-          onkeydown="if(event.key==='Enter')agregarMaterialCatalogo()">
-        <input type="text" id="nuevo-material-unidad-inp" class="fc" placeholder="Unidad por defecto (opcional)" style="max-width:180px;margin:0"
-          onkeydown="if(event.key==='Enter')agregarMaterialCatalogo()">
-        <button class="btn btn-primary" onclick="agregarMaterialCatalogo()"><i class="fa fa-plus fa-sm"></i> Agregar</button>
-        <button class="btn btn-ghost" onclick="abrirConteoZaiko()" style="margin-left:auto"><i class="fa fa-clipboard-list fa-sm"></i> Cargar conteo físico en Zaiko</button>
+        <button class="btn btn-primary" onclick="abrirConteoZaiko()"><i class="fa fa-plus fa-sm"></i> Agregar material(es)</button>
       </div>
-      ${rows.length ? rows.map(m => `
+      ${rows.length ? rows.map(m => {
+        const extra = [m.marca, m.color, m.tamano, m.presentacion].filter(Boolean).join(' · ');
+        return `
         <div class="notif-row" style="gap:10px">
           <div class="notif-info">
-            <div class="notif-email">${escHtml(m.nombre)}</div>
-            <div class="notif-tipo">${escHtml(m.unidad_medida_default || 'Sin unidad por defecto')}</div>
+            <div class="notif-email">${escHtml(m.nombre)} <span style="font-weight:400;color:var(--muted)">· ${escHtml(m.id_activo)}</span></div>
+            <div class="notif-tipo">${escHtml(m.cantidad || '0')} ${escHtml(m.unidad || 'Unidad')}${extra ? ' · ' + escHtml(extra) : ''}</div>
           </div>
-          <label class="toggle" title="${m.activo ? 'Desactivar' : 'Activar'}">
-            <input type="checkbox" ${m.activo ? 'checked' : ''} onchange="toggleMaterialActivo(${m.id}, this.checked)">
-            <div class="toggle-track"><div class="toggle-thumb"></div></div>
-          </label>
-        </div>`).join('') : '<p style="font-size:13px;color:var(--muted)">Sin materiales registrados</p>'}
+          ${_badgeEstadoZaikoMaterial(m.estado_activo)}
+        </div>`;
+      }).join('') : '<p style="font-size:13px;color:var(--muted)">Sin materiales registrados en Zaiko</p>'}
     `;
   } catch(e) {
     el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p style="color:var(--red)">${e.message}</p></div>`;
   }
 }
 
-async function toggleMaterialActivo(id, activo) {
-  const { error } = await _sb.from('bib_materiales').update({ activo }).eq('id', id);
-  if (error) { toast('Error: ' + error.message, 'error'); return; }
-  await renderCatalogoMateriales(true);
-  toast(activo ? 'Material activado' : 'Material desactivado', 'success');
-}
-
-async function agregarMaterialCatalogo() {
-  const inp = document.getElementById('nuevo-material-inp');
-  const unidadInp = document.getElementById('nuevo-material-unidad-inp');
-  const nombre = inp?.value?.trim();
-  if (!nombre) { toast('Ingresa un nombre', 'error'); inp?.focus(); return; }
-  const { error } = await _sb.from('bib_materiales').insert({ nombre, unidad_medida_default: unidadInp?.value?.trim() || null });
-  if (error) { toast('Error: ' + error.message, 'error'); return; }
-  inp.value = ''; if (unidadInp) unidadInp.value = '';
-  await renderCatalogoMateriales(true);
-  toast('Material agregado', 'success');
-}
-
+// bib_materiales sigue existiendo como tabla interna solo para la FK de
+// bib_movimiento_materiales.material_id — ya no se muestra ni se
+// administra directamente, se completa sola en segundo plano.
 async function obtenerOCrearMaterial(nombre, unidadDefault) {
   const nombreTrim = nombre.trim();
   const existente = _matCache.find(m => m.nombre.toLowerCase() === nombreTrim.toLowerCase());
@@ -228,6 +217,7 @@ function abrirConteoZaiko() {
   document.getElementById('cz-mat-sugerencias').style.display = 'none';
   renderListaConteoZaiko();
   document.getElementById('modal-conteo-zaiko').classList.add('open');
+  _cargarCatalogoZaikoMateriales();
 }
 
 function toggleCzMatExtra() {
@@ -252,20 +242,25 @@ function _renderSugerenciasConteoZaiko() {
   const q = document.getElementById('cz-mat-nombre').value.trim();
   const panel = document.getElementById('cz-mat-sugerencias');
   if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  if (_zaikoMaterialesCache === null) {
+    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Consultando Zaiko…</div></div>`;
+    panel.style.display = 'block';
+    return;
+  }
   const low = q.toLowerCase();
-  const fil = _matCache.filter(m => m.activo && m.nombre.toLowerCase().includes(low)).slice(0, 8);
+  const fil = _zaikoMaterialesCache.filter(m => m.estado_activo === 'ACTIVO' && (m.nombre || '').toLowerCase().includes(low)).slice(0, 8);
   if (!fil.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
   panel.innerHTML = `<div class="ss-list">${fil.map(m => `
-    <div class="ss-opt" onclick="_seleccionarMaterialSugeridoConteo('${m.id}')">${escHtml(m.nombre)}</div>
+    <div class="ss-opt" onclick="_seleccionarMaterialSugeridoConteo('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
   `).join('')}</div>`;
   panel.style.display = 'block';
 }
 
-function _seleccionarMaterialSugeridoConteo(id) {
-  const m = _matCache.find(x => String(x.id) === String(id));
+function _seleccionarMaterialSugeridoConteo(idActivo) {
+  const m = (_zaikoMaterialesCache || []).find(x => x.id_activo === idActivo);
   if (!m) return;
   document.getElementById('cz-mat-nombre').value = m.nombre;
-  if (m.unidad_medida_default) document.getElementById('cz-mat-unidad').value = m.unidad_medida_default;
+  if (m.unidad) document.getElementById('cz-mat-unidad').value = m.unidad;
   if (m.marca)        document.getElementById('cz-mat-marca').value = m.marca;
   if (m.color)        document.getElementById('cz-mat-color').value = m.color;
   if (m.tamano)        document.getElementById('cz-mat-tamano').value = m.tamano;
@@ -338,6 +333,7 @@ async function guardarConteoZaiko() {
     if (!r.ok) throw new Error(r.msg || 'Error desconocido');
     toast('✅ ' + r.creados + ' material(es) cargado(s) en Zaiko', 'success');
     cerrarModal('modal-conteo-zaiko');
+    if (_matTab === 'catalogo') await renderCatalogoMateriales(true);
   } catch (e) {
     toast('Error: ' + e.message, 'error');
   } finally {
@@ -411,24 +407,29 @@ function _renderSugerenciasMaterial() {
   const q = document.getElementById('nm-mat-nombre').value.trim();
   const panel = document.getElementById('nm-mat-sugerencias');
   if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  if (_zaikoMaterialesCache === null) {
+    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Consultando Zaiko…</div></div>`;
+    panel.style.display = 'block';
+    return; // _cargarCatalogoZaikoMateriales() vuelve a llamar esta función al terminar.
+  }
   const low = q.toLowerCase();
-  const fil = _matCache.filter(m => m.activo && m.nombre.toLowerCase().includes(low)).slice(0, 8);
+  const fil = _zaikoMaterialesCache.filter(m => m.estado_activo === 'ACTIVO' && (m.nombre || '').toLowerCase().includes(low)).slice(0, 8);
   if (!fil.length) {
     panel.style.display = 'none';
     panel.innerHTML = '';
     return;
   }
   panel.innerHTML = `<div class="ss-list">${fil.map(m => `
-    <div class="ss-opt" onclick="_seleccionarMaterialSugerido('${m.id}')">${escHtml(m.nombre)}</div>
+    <div class="ss-opt" onclick="_seleccionarMaterialSugerido('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
   `).join('')}</div>`;
   panel.style.display = 'block';
 }
 
-function _seleccionarMaterialSugerido(id) {
-  const m = _matCache.find(x => String(x.id) === String(id));
+function _seleccionarMaterialSugerido(idActivo) {
+  const m = (_zaikoMaterialesCache || []).find(x => x.id_activo === idActivo);
   if (!m) return;
   document.getElementById('nm-mat-nombre').value = m.nombre;
-  if (m.unidad_medida_default) document.getElementById('nm-mat-unidad').value = m.unidad_medida_default;
+  if (m.unidad) document.getElementById('nm-mat-unidad').value = m.unidad;
   if (m.marca)        document.getElementById('nm-mat-marca').value = m.marca;
   if (m.color)         document.getElementById('nm-mat-color').value = m.color;
   if (m.tamano)        document.getElementById('nm-mat-tamano').value = m.tamano;
@@ -444,16 +445,27 @@ function _seleccionarMaterialSugerido(id) {
 // libros, un material no tiene "copias" — si hay más de un activo con
 // el mismo nombre en Zaiko se usa el primero disponible (ACTIVO).
 let _zaikoMaterialesCache = null;   // null = aún no cargado; [] = cargado, vacío
+let _zaikoMaterialesCargando = null; // promesa en curso — agregarLineaMaterial la espera si el bibliotecario alcanza a darle "+" antes de que termine
 
 async function _cargarCatalogoZaikoMateriales() {
-  try {
-    const r = await gasCall('zaikoListarMateriales', {});
-    _zaikoMaterialesCache = r.ok ? (r.materiales || []) : [];
-    if (!r.ok) console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', r.msg);
-  } catch (e) {
-    _zaikoMaterialesCache = [];
-    console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', e.message);
-  }
+  _zaikoMaterialesCargando = (async () => {
+    try {
+      const r = await gasCall('zaikoListarMateriales', {});
+      _zaikoMaterialesCache = r.ok ? (r.materiales || []) : [];
+      if (!r.ok) console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', r.msg);
+    } catch (e) {
+      _zaikoMaterialesCache = [];
+      console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', e.message);
+    }
+  })();
+  await _zaikoMaterialesCargando;
+  _zaikoMaterialesCargando = null;
+  // Si el bibliotecario ya empezó a escribir en cualquiera de los dos
+  // modales que usan este catálogo mientras cargaba, refresca sus
+  // sugerencias (ambos existen siempre en el DOM, aunque el modal esté
+  // cerrado — llamarlos de más no tiene efecto visible).
+  if (typeof _renderSugerenciasMaterial === 'function') _renderSugerenciasMaterial();
+  if (typeof _renderSugerenciasConteoZaiko === 'function') _renderSugerenciasConteoZaiko();
 }
 
 function _matchZaikoMaterial(nombre) {
@@ -462,7 +474,7 @@ function _matchZaikoMaterial(nombre) {
   return _zaikoMaterialesCache.find(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO') || null;
 }
 
-function agregarLineaMaterial() {
+async function agregarLineaMaterial() {
   const nombre   = document.getElementById('nm-mat-nombre').value.trim();
   const cantidad = parseFloat(document.getElementById('nm-mat-cantidad').value);
   const unidad   = document.getElementById('nm-mat-unidad').value.trim();
@@ -474,6 +486,7 @@ function agregarLineaMaterial() {
   const color        = document.getElementById('nm-mat-color').value.trim();
   const tamano       = document.getElementById('nm-mat-tamano').value.trim();
   const presentacion = document.getElementById('nm-mat-presentacion').value.trim();
+  if (_zaikoMaterialesCargando) await _zaikoMaterialesCargando; // por si el catálogo de Zaiko todavía estaba cargando
   const zaikoMatch    = _matchZaikoMaterial(nombre);
 
   _movMaterialesTemp.push({
@@ -576,20 +589,40 @@ async function guardarMovimiento() {
         marca: linea.marca, color: linea.color, tamano: linea.tamano,
         presentacion: linea.presentacion,
         zaiko_activo_id: linea.zaikoActivoId,
-        zaiko_sync_estado: linea.zaikoActivoId ? 'PENDIENTE' : 'SIN_MATCH',
+        zaiko_sync_estado: 'PENDIENTE',
       });
     }
-    const { data: lineasInsertadas, error: eLineas } = await _sb.from('bib_movimiento_materiales').insert(lineasParaInsertar).select('id,zaiko_activo_id,cantidad_entregada');
+    const { data: lineasInsertadas, error: eLineas } = await _sb.from('bib_movimiento_materiales')
+      .insert(lineasParaInsertar)
+      .select('id,zaiko_activo_id,cantidad_entregada,nombre,unidad_medida,marca,color,tamano,presentacion');
     if (eLineas) throw eLineas;
 
-    // Espejo best-effort hacia Zaiko — una salida parcial por línea que sí
-    // tenga coincidencia. Nunca bloquea el guardado local ya hecho arriba.
+    // Espejo best-effort hacia Zaiko — una salida parcial por línea. Si el
+    // material no tenía coincidencia, se crea en Zaiko de una vez con la
+    // cantidad entregada como stock inicial (mismo mecanismo del conteo
+    // físico) y de inmediato se le hace la salida de esa misma cantidad —
+    // es lo único que Biblioteca sabe de un material que nunca había visto,
+    // así que queda en 0/AGOTADO hasta que alguien haga un conteo real.
+    // Nunca bloquea el guardado local ya hecho arriba.
     const _motivoMov = { prestamo: 'PRESTAMO MATERIAL', asignacion: 'ASIGNACION MATERIAL', consumo: 'CONSUMO MATERIAL' }[tipo] || 'SALIDA MATERIAL';
     for (const fila of lineasInsertadas) {
-      if (!fila.zaiko_activo_id) continue;
       try {
+        let idActivo = fila.zaiko_activo_id;
+        if (!idActivo) {
+          const rc = await gasCall('zaikoCargarConteo', {
+            items: [{
+              nombre: fila.nombre, unidad: fila.unidad_medida,
+              marca: fila.marca, color: fila.color, tamano: fila.tamano, presentacion: fila.presentacion,
+              cantidad: fila.cantidad_entregada,
+              notas: 'Creado automáticamente desde un movimiento de Biblioteca',
+            }],
+            usuario,
+          });
+          if (!rc.ok || !rc.ids || !rc.ids[0]) throw new Error(rc.msg || 'No se pudo crear el material en Zaiko');
+          idActivo = rc.ids[0];
+        }
         const rz = await gasCall('zaikoSalidaParcial', {
-          idActivo: fila.zaiko_activo_id,
+          idActivo,
           cantidad: fila.cantidad_entregada,
           destino: _movColabSel.nombre,
           motivo: _motivoMov,
@@ -597,6 +630,7 @@ async function guardarMovimiento() {
           usuario,
         });
         await _sb.from('bib_movimiento_materiales').update({
+          zaiko_activo_id: idActivo,
           zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
           zaiko_sync_detalle: rz.ok ? null : ('Salida no reflejada: ' + (rz.msg || 'error desconocido')),
         }).eq('id', fila.id);
