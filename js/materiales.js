@@ -207,35 +207,36 @@ async function obtenerOCrearMaterial(nombre, unidadDefault) {
 }
 
 // ── CARGAR CONTEO FÍSICO EN ZAIKO (puente Biblioteca→Zaiko) ─────
-// Espejo best-effort — crea/actualiza el inventario oficial de Zaiko a
-// partir del catálogo real de bib_materiales. Se excluyen los que ya se
-// migraron como activos individuales (no consumibles por lote) y "prueba"
-// (dato de prueba del catálogo). No es un movimiento de Biblioteca — es
-// la carga puntual del punto de partida (cantidad actual conocida).
-const CONTEO_ZAIKO_EXCLUIR = ['marcador', 'regla para tablero', 'az carta', 'prueba'];
-
+// Espejo best-effort — crea en el inventario oficial de Zaiko los
+// materiales que el usuario agregue aquí, con la cantidad contada.
+// No es un movimiento de Biblioteca ni depende del catálogo de
+// bib_materiales — es simplemente agregar uno o varios materiales
+// nuevos al conteo inicial de Zaiko.
 function abrirConteoZaiko() {
-  const materiales = _matCache.filter(m =>
-    m.activo && !CONTEO_ZAIKO_EXCLUIR.includes(m.nombre.trim().toLowerCase())
-  );
-  const tbody = document.getElementById('conteo-zaiko-tbody');
-  tbody.innerHTML = materiales.map((m, i) => `
-    <tr>
-      <td style="padding:6px 8px;font-size:13px">${escHtml(m.nombre)}</td>
-      <td style="padding:6px 8px"><input class="fc" data-conteo-unidad="${i}" value="${escHtml(m.unidad_medida_default || 'Unidad')}" style="margin:0;font-size:12px"></td>
-      <td style="padding:6px 8px"><input class="fc" type="number" min="0" step="any" data-conteo-cant="${i}" placeholder="0" style="margin:0;font-size:12px"></td>
-    </tr>`).join('');
-  tbody.dataset.materiales = JSON.stringify(materiales.map(m => m.nombre));
+  document.getElementById('conteo-zaiko-tbody').innerHTML = '';
+  agregarFilaConteoZaiko();
   document.getElementById('modal-conteo-zaiko').classList.add('open');
 }
 
+function agregarFilaConteoZaiko() {
+  const tbody = document.getElementById('conteo-zaiko-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td style="padding:6px 8px"><input class="fc" data-conteo-nombre placeholder="Nombre del material" style="margin:0;font-size:12px"></td>
+    <td style="padding:6px 8px"><input class="fc" data-conteo-unidad value="Unidad" style="margin:0;font-size:12px"></td>
+    <td style="padding:6px 8px"><input class="fc" type="number" min="0" step="any" data-conteo-cant placeholder="0" style="margin:0;font-size:12px"></td>
+    <td style="padding:6px 8px"><button class="btn-cls" onclick="this.closest('tr').remove()" title="Quitar"><i class="fa fa-xmark"></i></button></td>`;
+  tbody.appendChild(tr);
+}
+
 async function guardarConteoZaiko() {
-  const nombres = JSON.parse(document.getElementById('conteo-zaiko-tbody').dataset.materiales || '[]');
-  const items = nombres.map((nombre, i) => {
-    const unidEl = document.querySelector(`[data-conteo-unidad="${i}"]`);
-    const cantEl = document.querySelector(`[data-conteo-cant="${i}"]`);
-    return { nombre, unidad: unidEl ? unidEl.value : 'Unidad', cantidad: cantEl ? cantEl.value : '' };
-  });
+  const items = Array.from(document.querySelectorAll('#conteo-zaiko-tbody tr')).map(tr => ({
+    nombre: tr.querySelector('[data-conteo-nombre]').value.trim(),
+    unidad: tr.querySelector('[data-conteo-unidad]').value.trim() || 'Unidad',
+    cantidad: tr.querySelector('[data-conteo-cant]').value,
+  })).filter(it => it.nombre);
+
+  if (!items.length) { toast('Agrega al menos un material con nombre', 'error'); return; }
 
   const btn = document.getElementById('btn-conteo-zaiko-guardar');
   btn.classList.add('loading'); btn.disabled = true;
