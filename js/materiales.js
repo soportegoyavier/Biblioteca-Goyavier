@@ -449,6 +449,10 @@ function abrirModalMovimiento() {
   _movColabSel = null;
   _movSolicitudOrigen = null;
   _movMaterialesTemp = [];
+  clearTimeout(_matModalBuscarTimer);
+  _matSugerenciasActuales = [];
+  document.getElementById('nm-mat-sugerencias').style.display = 'none';
+  document.getElementById('nm-mat-sugerencias').innerHTML = '';
   renderListaMaterialesTemp();
   onCambioTipoMovimiento();
   document.getElementById('modal-movimiento').classList.add('open');
@@ -1139,6 +1143,9 @@ function abrirModalPrestamoLibro() {
   document.getElementById('npl-zaiko-wrap').style.display = 'none';
   document.getElementById('npl-zaiko-copia').innerHTML = '';
   document.getElementById('npl-zaiko-hint').textContent = '';
+  clearTimeout(_libBuscarTimer);
+  document.getElementById('npl-libro-sugerencias').style.display = 'none';
+  document.getElementById('npl-libro-sugerencias').innerHTML = '';
   document.getElementById('modal-prestamo-libro').classList.add('open');
 }
 
