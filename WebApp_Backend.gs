@@ -113,6 +113,9 @@ function despachar(p) {
     case "zaikoPrestar":           return zaikoPrestar(p);
     case "zaikoDevolver":          return zaikoDevolver(p);
     case "zaikoCargarConteo":      return zaikoCargarConteo(p);
+    case "zaikoListarMateriales":  return zaikoListarMateriales(p);
+    case "zaikoSalidaParcial":     return zaikoSalidaParcial(p);
+    case "zaikoDevolucionParcial": return zaikoDevolucionParcial(p);
     default: return { error: "Acción no reconocida: " + p.accion };
   }
 }
@@ -245,6 +248,59 @@ function zaikoCargarConteo(p) {
   try {
     return _zaikoCall('fn_cargar_conteo_biblioteca', {
       p_items: p.items || [],
+      p_usuario: p.usuario || 'BIBLIOTECA'
+    });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+// Catálogo de materiales de Zaiko (categoria biblioteca, subcategoria
+// distinta de Libros/Textos escolares) — mismo patrón que
+// zaikoListarCopiasLibro: se trae TODO de una vez, el emparejamiento
+// por nombre con lo que escribe el bibliotecario se hace en el navegador.
+function zaikoListarMateriales(p) {
+  try {
+    var r = _zaikoCall('fn_listar_activos_biblioteca', {});
+    if (!Array.isArray(r)) return { ok: false, msg: (r && r.msg) || 'No se pudo consultar Zaiko' };
+    var LIBRO_SUBCATS = { 'LIBROS': true, 'TEXTOS ESCOLARES': true };
+    var materiales = r.filter(function (a) {
+      return !LIBRO_SUBCATS[(a.subcategoria || '').toUpperCase()];
+    });
+    return { ok: true, materiales: materiales };
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+// Resta cantidad de un material ya identificado en Zaiko (entrega de un
+// movimiento: prestamo/asignacion/consumo) — p.idActivo es el id_activo
+// de Zaiko (ej. BIB-52), no el id local de Biblioteca.
+function zaikoSalidaParcial(p) {
+  try {
+    return _zaikoCall('fn_salida_parcial_biblioteca', {
+      p_id: p.idActivo,
+      p_cantidad: p.cantidad,
+      p_destino: p.destino || '',
+      p_motivo: p.motivo || 'SALIDA',
+      p_obs: p.obs || '',
+      p_usuario: p.usuario || 'BIBLIOTECA'
+    });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+// Suma cantidad de vuelta a un material (devolución de movimiento o
+// retorno parcial de un consumo) — reactiva el activo si estaba AGOTADO.
+function zaikoDevolucionParcial(p) {
+  try {
+    return _zaikoCall('fn_devolucion_parcial_biblioteca', {
+      p_id: p.idActivo,
+      p_cantidad: p.cantidad,
+      p_origen: p.origen || '',
+      p_motivo: p.motivo || 'DEVOLUCION',
+      p_obs: p.obs || '',
       p_usuario: p.usuario || 'BIBLIOTECA'
     });
   } catch (e) {

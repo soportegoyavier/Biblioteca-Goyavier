@@ -365,6 +365,8 @@ function abrirModalMovimiento() {
   renderListaMaterialesTemp();
   onCambioTipoMovimiento();
   document.getElementById('modal-movimiento').classList.add('open');
+  _zaikoMaterialesCache = null;
+  _cargarCatalogoZaikoMateriales();
 }
 
 function toggleNmMatExtra() {
@@ -434,6 +436,32 @@ function _seleccionarMaterialSugerido(id) {
   document.getElementById('nm-mat-sugerencias').style.display = 'none';
 }
 
+// ── PUENTE ZAIKO PARA MATERIALES (espejo best-effort) ──────────
+// Mismo patrón que el de libros: catálogo completo de Zaiko (categoría
+// biblioteca, subcategoría distinta de Libros/Textos escolares) se trae
+// una sola vez al abrir el modal de movimiento; el emparejamiento por
+// nombre con lo que escribe el bibliotecario es local. A diferencia de
+// libros, un material no tiene "copias" — si hay más de un activo con
+// el mismo nombre en Zaiko se usa el primero disponible (ACTIVO).
+let _zaikoMaterialesCache = null;   // null = aún no cargado; [] = cargado, vacío
+
+async function _cargarCatalogoZaikoMateriales() {
+  try {
+    const r = await gasCall('zaikoListarMateriales', {});
+    _zaikoMaterialesCache = r.ok ? (r.materiales || []) : [];
+    if (!r.ok) console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', r.msg);
+  } catch (e) {
+    _zaikoMaterialesCache = [];
+    console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', e.message);
+  }
+}
+
+function _matchZaikoMaterial(nombre) {
+  if (!_zaikoMaterialesCache || !_zaikoMaterialesCache.length) return null;
+  const norm = _normalizarTextoJS(nombre);
+  return _zaikoMaterialesCache.find(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO') || null;
+}
+
 function agregarLineaMaterial() {
   const nombre   = document.getElementById('nm-mat-nombre').value.trim();
   const cantidad = parseFloat(document.getElementById('nm-mat-cantidad').value);
@@ -446,11 +474,13 @@ function agregarLineaMaterial() {
   const color        = document.getElementById('nm-mat-color').value.trim();
   const tamano       = document.getElementById('nm-mat-tamano').value.trim();
   const presentacion = document.getElementById('nm-mat-presentacion').value.trim();
+  const zaikoMatch    = _matchZaikoMaterial(nombre);
 
   _movMaterialesTemp.push({
     nombre, cantidad, unidad,
     marca: marca || null, color: color || null, tamano: tamano || null,
     presentacion: presentacion || null,
+    zaikoActivoId: zaikoMatch ? zaikoMatch.id_activo : null,
   });
   document.getElementById('nm-mat-nombre').value = '';
   document.getElementById('nm-mat-cantidad').value = '';
@@ -475,11 +505,15 @@ function renderListaMaterialesTemp() {
   }
   el.innerHTML = _movMaterialesTemp.map((l, i) => {
     const extra = [l.marca, l.color, l.tamano, l.presentacion].filter(Boolean).join(' · ');
+    const zaikoTag = l.zaikoActivoId
+      ? `<span style="color:var(--green)">✓ ${escHtml(l.zaikoActivoId)} en Zaiko</span>`
+      : `<span style="color:var(--muted)">Sin coincidencia en Zaiko — no se reflejará</span>`;
     return `
     <div style="display:flex;align-items:center;gap:10px;background:var(--s3);border-radius:var(--radius-sm);padding:8px 12px">
       <div style="flex:1;font-size:13px">
         ${escHtml(l.nombre)} — <strong>${l.cantidad} ${escHtml(l.unidad)}</strong>
         ${extra ? `<div style="font-size:11px;color:var(--muted)">${escHtml(extra)}</div>` : ''}
+        <div style="font-size:11px">${zaikoTag}</div>
       </div>
       <button class="btn-cls" onclick="quitarLineaMaterial(${i})" title="Quitar"><i class="fa fa-xmark fa-xs"></i></button>
     </div>`;
@@ -541,10 +575,38 @@ async function guardarMovimiento() {
         unidad_medida: linea.unidad,
         marca: linea.marca, color: linea.color, tamano: linea.tamano,
         presentacion: linea.presentacion,
+        zaiko_activo_id: linea.zaikoActivoId,
+        zaiko_sync_estado: linea.zaikoActivoId ? 'PENDIENTE' : 'SIN_MATCH',
       });
     }
-    const { error: eLineas } = await _sb.from('bib_movimiento_materiales').insert(lineasParaInsertar);
+    const { data: lineasInsertadas, error: eLineas } = await _sb.from('bib_movimiento_materiales').insert(lineasParaInsertar).select('id,zaiko_activo_id,cantidad_entregada');
     if (eLineas) throw eLineas;
+
+    // Espejo best-effort hacia Zaiko — una salida parcial por línea que sí
+    // tenga coincidencia. Nunca bloquea el guardado local ya hecho arriba.
+    const _motivoMov = { prestamo: 'PRESTAMO MATERIAL', asignacion: 'ASIGNACION MATERIAL', consumo: 'CONSUMO MATERIAL' }[tipo] || 'SALIDA MATERIAL';
+    for (const fila of lineasInsertadas) {
+      if (!fila.zaiko_activo_id) continue;
+      try {
+        const rz = await gasCall('zaikoSalidaParcial', {
+          idActivo: fila.zaiko_activo_id,
+          cantidad: fila.cantidad_entregada,
+          destino: _movColabSel.nombre,
+          motivo: _motivoMov,
+          obs: obs || '',
+          usuario,
+        });
+        await _sb.from('bib_movimiento_materiales').update({
+          zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
+          zaiko_sync_detalle: rz.ok ? null : ('Salida no reflejada: ' + (rz.msg || 'error desconocido')),
+        }).eq('id', fila.id);
+      } catch (ze) {
+        await _sb.from('bib_movimiento_materiales').update({
+          zaiko_sync_estado: 'ERROR',
+          zaiko_sync_detalle: 'Salida no reflejada: ' + ze.message,
+        }).eq('id', fila.id);
+      }
+    }
 
     await _sb.from('bib_movimientos_historial').insert({
       movimiento_id: mov.id, estado_anterior: null, estado_nuevo: 'entregado',
@@ -718,11 +780,39 @@ async function confirmarDevolucionMovimiento() {
       fecha_devolucion_real: ahora,
       usuario_recibio_devolucion: usuario,
       notas_devolucion: obs || null,
-    }).eq('id', _movDevolverId).select('id_movimiento,colaborador_email').single();
+    }).eq('id', _movDevolverId).select('id_movimiento,colaborador_email,colaborador_nombre').single();
     if (error) throw error;
     await _sb.from('bib_movimientos_historial').insert({
       movimiento_id: _movDevolverId, estado_anterior: 'entregado', estado_nuevo: 'devuelto', notas: obs || null
     });
+
+    // Espejo best-effort hacia Zaiko — prestamo/asignacion se devuelven de
+    // una sola vez (no hay retorno parcial por línea, a diferencia de
+    // consumo), así que se devuelve la cantidad entregada completa de cada
+    // línea que sí quedó reflejada en Zaiko al entregarse.
+    const { data: lineasDevolver } = await _sb.from('bib_movimiento_materiales')
+      .select('id,zaiko_activo_id,zaiko_sync_estado,cantidad_entregada').eq('movimiento_id', _movDevolverId);
+    let _okSync = 0, _totalSync = 0;
+    for (const linea of (lineasDevolver || [])) {
+      if (!linea.zaiko_activo_id || linea.zaiko_sync_estado !== 'SINCRONIZADO') continue;
+      _totalSync++;
+      try {
+        const rz = await gasCall('zaikoDevolucionParcial', {
+          idActivo: linea.zaiko_activo_id,
+          cantidad: linea.cantidad_entregada,
+          origen: mov.colaborador_nombre || '',
+          motivo: 'DEVOLUCION MATERIAL',
+          obs: obs || '',
+          usuario,
+        });
+        if (rz.ok) _okSync++;
+      } catch (ze) { /* best-effort — se resume abajo */ }
+    }
+    if (_totalSync > 0) {
+      await _sb.from('bib_movimientos').update({
+        zaiko_sync_detalle: `Devolución: ${_okSync}/${_totalSync} línea(s) reflejadas en Zaiko`,
+      }).eq('id', _movDevolverId);
+    }
 
     if (mov.colaborador_email) {
       const { data: lineas } = await _sb.from('bib_movimiento_materiales')
@@ -771,18 +861,43 @@ async function confirmarRetornoMaterial() {
   btn.classList.add('loading'); btn.disabled = true;
   try {
     const { data: linea, error: eLin } = await _sb.from('bib_movimiento_materiales')
-      .select('cantidad_entregada,cantidad_devuelta,movimiento_id').eq('id', _movRetornoLineaId).single();
+      .select('cantidad_entregada,cantidad_devuelta,movimiento_id,nombre,zaiko_activo_id,zaiko_sync_estado').eq('id', _movRetornoLineaId).single();
     if (eLin) throw eLin;
     if (cantidad + linea.cantidad_devuelta > linea.cantidad_entregada) {
       toast('La cantidad devuelta no puede superar lo entregado', 'error');
       return;
     }
     const usuario = await usuarioActualEmail();
-    const { error } = await _sb.from('bib_materiales_retornos').insert({
+    const { data: retorno, error } = await _sb.from('bib_materiales_retornos').insert({
       movimiento_material_id: _movRetornoLineaId,
       cantidad, usuario, observaciones: obs || null,
-    });
+      zaiko_sync_estado: (linea.zaiko_activo_id && linea.zaiko_sync_estado === 'SINCRONIZADO') ? 'PENDIENTE' : 'SIN_MATCH',
+    }).select('id').single();
     if (error) throw error;
+
+    // Espejo best-effort hacia Zaiko — solo si la salida original de esta
+    // línea sí se reflejó allá.
+    if (linea.zaiko_activo_id && linea.zaiko_sync_estado === 'SINCRONIZADO') {
+      try {
+        const rz = await gasCall('zaikoDevolucionParcial', {
+          idActivo: linea.zaiko_activo_id,
+          cantidad,
+          motivo: 'RETORNO PARCIAL MATERIAL',
+          obs: obs || '',
+          usuario,
+        });
+        await _sb.from('bib_materiales_retornos').update({
+          zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
+          zaiko_sync_detalle: rz.ok ? null : ('Retorno no reflejado: ' + (rz.msg || 'error desconocido')),
+        }).eq('id', retorno.id);
+      } catch (ze) {
+        await _sb.from('bib_materiales_retornos').update({
+          zaiko_sync_estado: 'ERROR',
+          zaiko_sync_detalle: 'Retorno no reflejado: ' + ze.message,
+        }).eq('id', retorno.id);
+      }
+    }
+
     toast('Retorno registrado', 'success');
     cerrarModal('modal-retorno-material');
     await abrirDetalleMovimiento(linea.movimiento_id);
