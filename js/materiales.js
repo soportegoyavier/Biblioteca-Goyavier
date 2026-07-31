@@ -555,6 +555,29 @@ async function _matchZaikoMaterial(nombre) {
   return items.find(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO') || null;
 }
 
+// Antes de guardar un movimiento (entrega = salida en Zaiko), vuelve a
+// consultar el stock real de cada línea que ya tiene un material
+// identificado en Zaiko (zaikoActivoId) — la cantidad pudo cambiar desde
+// que se agregó la línea. Si no alcanza, bloquea el guardado en vez de
+// dejar que Zaiko rechace la salida en silencio (best-effort no debe
+// significar "el usuario nunca se entera"). Líneas de material nuevo
+// (sin zaikoActivoId) no se validan: se crean en Zaiko con esa misma
+// cantidad como stock inicial, siempre alcanza.
+async function _validarStockZaiko(lineas) {
+  const errores = [];
+  for (const linea of lineas) {
+    if (!linea.zaikoActivoId) continue;
+    const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', linea.nombre, 5);
+    const item = items.find(m => m.id_activo === linea.zaikoActivoId);
+    if (!item) continue; // ya no se encuentra por nombre — no bloquear por un caso raro, zaikoSalidaParcial lo marcará como ERROR igual
+    const disponible = parseFloat(item.cantidad);
+    if (!isNaN(disponible) && linea.cantidad > disponible) {
+      errores.push(`${linea.nombre}: pides ${linea.cantidad}, quedan ${disponible} en Zaiko`);
+    }
+  }
+  return errores;
+}
+
 async function agregarLineaMaterial() {
   const nombre   = document.getElementById('nm-mat-nombre').value.trim();
   const cantidad = parseFloat(document.getElementById('nm-mat-cantidad').value);
@@ -623,6 +646,9 @@ async function guardarMovimiento() {
   if (!_movColabSel)                     { toast('Selecciona el colaborador solicitante', 'error'); return; }
   if (!_movMaterialesTemp.length)         { toast('Agrega al menos un material', 'error'); return; }
   if (tipo === 'prestamo' && !fechaLim)   { toast('Indica la fecha de devolución', 'error'); return; }
+
+  const errStock = await _validarStockZaiko(_movMaterialesTemp);
+  if (errStock.length) { toast(errStock.join(' · '), 'error'); return; }
 
   const btn = document.getElementById('btn-guardar-movimiento');
   btn.classList.add('loading'); btn.disabled = true;
@@ -1065,9 +1091,56 @@ async function eliminarMovimiento() {
   if (!_movDetalleId) return;
   if (!confirm('¿Eliminar este movimiento? Esta acción no se puede deshacer.')) return;
   try {
+    const { data: mov, error: eMov } = await _sb.from('bib_movimientos')
+      .select('fecha_devolucion_real').eq('id', _movDetalleId).single();
+    if (eMov) throw eMov;
+
+    // Si el movimiento ya se devolvió por completo (prestamo/asignacion),
+    // esa devolución ya intentó restaurar cada línea en Zaiko — no se
+    // vuelve a tocar aquí para no duplicar el crédito. Solo se restaura
+    // lo que sigue "afuera" en Zaiko: entregado y sincronizado, menos lo
+    // que ya se devolvió de vuelta con éxito (retornos parciales de
+    // consumo, vía bib_materiales_retornos).
+    let restauradas = 0, aRestaurar = 0;
+    if (!mov.fecha_devolucion_real) {
+      const usuario = await usuarioActualEmail();
+      const { data: lineas } = await _sb.from('bib_movimiento_materiales')
+        .select('id,zaiko_activo_id,zaiko_sync_estado,cantidad_entregada,nombre').eq('movimiento_id', _movDetalleId);
+      for (const linea of (lineas || [])) {
+        if (!linea.zaiko_activo_id || linea.zaiko_sync_estado !== 'SINCRONIZADO') continue;
+        const { data: retornos } = await _sb.from('bib_materiales_retornos')
+          .select('cantidad,zaiko_sync_estado').eq('movimiento_material_id', linea.id);
+        const yaDevuelto = (retornos || [])
+          .filter(r => r.zaiko_sync_estado === 'SINCRONIZADO')
+          .reduce((s, r) => s + Number(r.cantidad), 0);
+        const pendiente = linea.cantidad_entregada - yaDevuelto;
+        if (pendiente <= 0) continue;
+        aRestaurar++;
+        try {
+          const rz = await gasCall('zaikoDevolucionParcial', {
+            idActivo: linea.zaiko_activo_id,
+            cantidad: pendiente,
+            motivo: 'DEVOLUCION POR ELIMINACION DE MOVIMIENTO',
+            usuario,
+          });
+          if (rz.ok) restauradas++;
+        } catch (ze) { /* best-effort — se resume en el toast final */ }
+      }
+    }
+
     const { error } = await _sb.from('bib_movimientos').delete().eq('id', _movDetalleId);
     if (error) throw error;
-    toast('Movimiento eliminado', 'success');
+
+    if (aRestaurar > 0) {
+      toast(
+        restauradas === aRestaurar
+          ? `Movimiento eliminado — stock restaurado en Zaiko (${restauradas}/${aRestaurar})`
+          : `Movimiento eliminado — stock restaurado solo en ${restauradas}/${aRestaurar} material(es), revisa Zaiko manualmente`,
+        restauradas === aRestaurar ? 'success' : 'error'
+      );
+    } else {
+      toast('Movimiento eliminado', 'success');
+    }
     cerrarModal('modal-detalle-movimiento');
     await renderMovimientos();
   } catch(e) {
