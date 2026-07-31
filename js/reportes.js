@@ -409,9 +409,15 @@ async function exportarExcelGeneral() {
     r1.push(_xHdr(`Generado: ${_xFecha(new Date().toISOString())}`, 'per', N1));
     r1.push(_xHdr('', 'def', N1));
 
+    // Recibidas/Impresas son acumulativos: el flujo es pendiente -> recibido
+    // -> impreso -> entregado, así que una solicitud ya entregada también
+    // pasó por recibida e impresa. Contar solo el estado actual subestimaba
+    // ambos conteos a medida que las solicitudes avanzaban.
+    const totRecibidas = cnt.recibido + cnt.impreso + cnt.entregado;
+    const totImpresas  = cnt.impreso + cnt.entregado;
     r1.push(_xHdr('SOLICITUDES DEL MES', 'sh', N1));
     r1.push(_xRow([_xC('Pendientes','String','kn'),_xC('Recibidas','String','kn'),_xC('Impresas','String','kn'),_xC('Entregadas','String','kn'),_xC('Canceladas','String','kn')], 18));
-    r1.push(_xRow([_xC(cnt.pendiente,'Number','kvw'),_xC(cnt.recibido,'Number','kv'),_xC(cnt.impreso,'Number','kv'),_xC(cnt.entregado,'Number','kvo'),_xC(cnt.cancelado,'Number','kvr')], 30));
+    r1.push(_xRow([_xC(cnt.pendiente,'Number','kvw'),_xC(totRecibidas,'Number','kv'),_xC(totImpresas,'Number','kv'),_xC(cnt.entregado,'Number','kvo'),_xC(cnt.cancelado,'Number','kvr')], 30));
     r1.push(_xRow([_xC('Total solicitudes','String','kn'),_xC(SS.length,'Number','kv'),_xC('','String','def'),_xC('','String','def'),_xC('','String','def')], 22));
     r1.push(_xHdr('', 'def', N1));
 

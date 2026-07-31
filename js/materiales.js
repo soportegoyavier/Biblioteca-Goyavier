@@ -309,7 +309,6 @@ function abrirConteoZaiko() {
   document.getElementById('cz-mat-sugerencias').style.display = 'none';
   renderListaConteoZaiko();
   document.getElementById('modal-conteo-zaiko').classList.add('open');
-  _cargarCatalogoZaikoMateriales();
 }
 
 function toggleCzMatExtra() {
@@ -330,26 +329,26 @@ function czBuscarDebounce() {
   _czBuscarTimer = setTimeout(_renderSugerenciasConteoZaiko, 200);
 }
 
-function _renderSugerenciasConteoZaiko() {
+let _czSugerenciasActuales = [];
+
+async function _renderSugerenciasConteoZaiko() {
   const q = document.getElementById('cz-mat-nombre').value.trim();
   const panel = document.getElementById('cz-mat-sugerencias');
   if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
-  if (_zaikoMaterialesCache === null) {
-    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Consultando Zaiko…</div></div>`;
-    panel.style.display = 'block';
-    return;
-  }
-  const low = q.toLowerCase();
-  const fil = _zaikoMaterialesCache.filter(m => m.estado_activo === 'ACTIVO' && (m.nombre || '').toLowerCase().includes(low)).slice(0, 8);
-  if (!fil.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
-  panel.innerHTML = `<div class="ss-list">${fil.map(m => `
+  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando en Zaiko…</div></div>`;
+  panel.style.display = 'block';
+  const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', q, 8);
+  if (document.getElementById('cz-mat-nombre').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
+  _czSugerenciasActuales = items.filter(m => m.estado_activo === 'ACTIVO');
+  if (!_czSugerenciasActuales.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.innerHTML = `<div class="ss-list">${_czSugerenciasActuales.map(m => `
     <div class="ss-opt" onclick="_seleccionarMaterialSugeridoConteo('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
   `).join('')}</div>`;
   panel.style.display = 'block';
 }
 
 function _seleccionarMaterialSugeridoConteo(idActivo) {
-  const m = (_zaikoMaterialesCache || []).find(x => x.id_activo === idActivo);
+  const m = _czSugerenciasActuales.find(x => x.id_activo === idActivo);
   if (!m) return;
   document.getElementById('cz-mat-nombre').value = m.nombre;
   if (m.unidad) document.getElementById('cz-mat-unidad').value = m.unidad;
@@ -453,8 +452,6 @@ function abrirModalMovimiento() {
   renderListaMaterialesTemp();
   onCambioTipoMovimiento();
   document.getElementById('modal-movimiento').classList.add('open');
-  _zaikoMaterialesCache = null;
-  _cargarCatalogoZaikoMateriales();
 }
 
 function toggleNmMatExtra() {
@@ -495,30 +492,30 @@ function matBuscarDebounce() {
   _matModalBuscarTimer = setTimeout(_renderSugerenciasMaterial, 200);
 }
 
-function _renderSugerenciasMaterial() {
+let _matSugerenciasActuales = [];
+
+async function _renderSugerenciasMaterial() {
   const q = document.getElementById('nm-mat-nombre').value.trim();
   const panel = document.getElementById('nm-mat-sugerencias');
   if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
-  if (_zaikoMaterialesCache === null) {
-    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Consultando Zaiko…</div></div>`;
-    panel.style.display = 'block';
-    return; // _cargarCatalogoZaikoMateriales() vuelve a llamar esta función al terminar.
-  }
-  const low = q.toLowerCase();
-  const fil = _zaikoMaterialesCache.filter(m => m.estado_activo === 'ACTIVO' && (m.nombre || '').toLowerCase().includes(low)).slice(0, 8);
-  if (!fil.length) {
+  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando en Zaiko…</div></div>`;
+  panel.style.display = 'block';
+  const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', q, 8);
+  if (document.getElementById('nm-mat-nombre').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
+  _matSugerenciasActuales = items.filter(m => m.estado_activo === 'ACTIVO');
+  if (!_matSugerenciasActuales.length) {
     panel.style.display = 'none';
     panel.innerHTML = '';
     return;
   }
-  panel.innerHTML = `<div class="ss-list">${fil.map(m => `
+  panel.innerHTML = `<div class="ss-list">${_matSugerenciasActuales.map(m => `
     <div class="ss-opt" onclick="_seleccionarMaterialSugerido('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
   `).join('')}</div>`;
   panel.style.display = 'block';
 }
 
 function _seleccionarMaterialSugerido(idActivo) {
-  const m = (_zaikoMaterialesCache || []).find(x => x.id_activo === idActivo);
+  const m = _matSugerenciasActuales.find(x => x.id_activo === idActivo);
   if (!m) return;
   document.getElementById('nm-mat-nombre').value = m.nombre;
   if (m.unidad) document.getElementById('nm-mat-unidad').value = m.unidad;
@@ -530,40 +527,28 @@ function _seleccionarMaterialSugerido(idActivo) {
 }
 
 // ── PUENTE ZAIKO PARA MATERIALES (espejo best-effort) ──────────
-// Mismo patrón que el de libros: catálogo completo de Zaiko (categoría
-// biblioteca, subcategoría distinta de Libros/Textos escolares) se trae
-// una sola vez al abrir el modal de movimiento; el emparejamiento por
-// nombre con lo que escribe el bibliotecario es local. A diferencia de
-// libros, un material no tiene "copias" — si hay más de un activo con
-// el mismo nombre en Zaiko se usa el primero disponible (ACTIVO).
-let _zaikoMaterialesCache = null;   // null = aún no cargado; [] = cargado, vacío
-let _zaikoMaterialesCargando = null; // promesa en curso — agregarLineaMaterial la espera si el bibliotecario alcanza a darle "+" antes de que termine
-
-async function _cargarCatalogoZaikoMateriales() {
-  _zaikoMaterialesCargando = (async () => {
-    try {
-      const r = await gasCall('zaikoListarMateriales', {});
-      _zaikoMaterialesCache = r.ok ? (r.materiales || []) : [];
-      if (!r.ok) console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', r.msg);
-    } catch (e) {
-      _zaikoMaterialesCache = [];
-      console.warn('No se pudo cargar el catálogo de materiales de Zaiko:', e.message);
-    }
-  })();
-  await _zaikoMaterialesCargando;
-  _zaikoMaterialesCargando = null;
-  // Si el bibliotecario ya empezó a escribir en cualquiera de los dos
-  // modales que usan este catálogo mientras cargaba, refresca sus
-  // sugerencias (ambos existen siempre en el DOM, aunque el modal esté
-  // cerrado — llamarlos de más no tiene efecto visible).
-  if (typeof _renderSugerenciasMaterial === 'function') _renderSugerenciasMaterial();
-  if (typeof _renderSugerenciasConteoZaiko === 'function') _renderSugerenciasConteoZaiko();
+// Búsqueda en vivo contra Zaiko (fn_listar_activos_biblioteca_paginado) —
+// antes se descargaba el catálogo completo una sola vez al abrir el
+// modal y se filtraba en el navegador; con miles de libros/materiales
+// eso volvía lenta la pantalla. Ahora cada búsqueda (ya con debounce)
+// trae solo unos pocos resultados que coinciden con lo escrito.
+async function _buscarZaikoCatalogo(subcategoria, query, porPagina = 8) {
+  try {
+    const r = await gasCall('zaikoListarCatalogoPaginado', { subcategoria, pagina: 0, porPagina, query });
+    if (!r.ok) { console.warn('No se pudo consultar Zaiko:', r.msg); return []; }
+    return r.items || [];
+  } catch (e) {
+    console.warn('No se pudo consultar Zaiko:', e.message);
+    return [];
+  }
 }
 
-function _matchZaikoMaterial(nombre) {
-  if (!_zaikoMaterialesCache || !_zaikoMaterialesCache.length) return null;
+// A diferencia de libros, un material no tiene "copias" — si hay más de
+// un activo con el mismo nombre en Zaiko se usa el primero disponible.
+async function _matchZaikoMaterial(nombre) {
+  const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', nombre, 5);
   const norm = _normalizarTextoJS(nombre);
-  return _zaikoMaterialesCache.find(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO') || null;
+  return items.find(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO') || null;
 }
 
 async function agregarLineaMaterial() {
@@ -578,8 +563,7 @@ async function agregarLineaMaterial() {
   const color        = document.getElementById('nm-mat-color').value.trim();
   const tamano       = document.getElementById('nm-mat-tamano').value.trim();
   const presentacion = document.getElementById('nm-mat-presentacion').value.trim();
-  if (_zaikoMaterialesCargando) await _zaikoMaterialesCargando; // por si el catálogo de Zaiko todavía estaba cargando
-  const zaikoMatch    = _matchZaikoMaterial(nombre);
+  const zaikoMatch    = await _matchZaikoMaterial(nombre);
 
   _movMaterialesTemp.push({
     nombre, cantidad, unidad,
@@ -1152,12 +1136,10 @@ function abrirModalPrestamoLibro() {
   document.getElementById('npl-obs').value = '';
   onCambioTipoPrestatario();
   _zaikoCopiasDisponibles = [];
-  _zaikoLibrosCache = null;
   document.getElementById('npl-zaiko-wrap').style.display = 'none';
   document.getElementById('npl-zaiko-copia').innerHTML = '';
   document.getElementById('npl-zaiko-hint').textContent = '';
   document.getElementById('modal-prestamo-libro').classList.add('open');
-  _cargarCatalogoZaikoLibros();
 }
 
 // ── PUENTE ZAIKO (espejo best-effort — ver plan de integración) ────────
@@ -1166,10 +1148,10 @@ function abrirModalPrestamoLibro() {
 // no responde o el título no está catalogado ahí, el préstamo local se
 // guarda igual — solo queda marcado como pendiente de sincronizar.
 //
-// El catálogo completo de libros de Zaiko se trae UNA sola vez al abrir
-// el modal; mientras el bibliotecario escribe el título, el filtrado es
-// local (sin otro viaje de red por cada letra).
-let _zaikoLibrosCache = null;       // null = aún no cargado; [] = cargado, vacío
+// Búsqueda en vivo (fn_listar_activos_biblioteca_paginado, vía
+// _buscarZaikoCatalogo — ver bloque de materiales) en vez de descargar
+// el catálogo completo de libros al abrir el modal: con miles de
+// títulos, esa descarga volvía lenta la pantalla.
 let _zaikoCopiasDisponibles = [];
 
 function _normalizarTextoJS(s) {
@@ -1177,20 +1159,7 @@ function _normalizarTextoJS(s) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-async function _cargarCatalogoZaikoLibros() {
-  try {
-    const r = await gasCall('zaikoListarCopiasLibro', {});
-    _zaikoLibrosCache = r.ok ? (r.copias || []) : [];
-    if (!r.ok) console.warn('No se pudo cargar el catálogo de Zaiko:', r.msg);
-  } catch (e) {
-    _zaikoLibrosCache = [];
-    console.warn('No se pudo cargar el catálogo de Zaiko:', e.message);
-  }
-  // Si el bibliotecario ya empezó a escribir mientras esto cargaba, refresca.
-  _actualizarCopiasZaiko();
-}
-
-function _actualizarCopiasZaiko() {
+async function _actualizarCopiasZaiko() {
   const titulo = document.getElementById('npl-libro-titulo').value.trim();
   const wrap = document.getElementById('npl-zaiko-wrap');
   const sel  = document.getElementById('npl-zaiko-copia');
@@ -1201,14 +1170,13 @@ function _actualizarCopiasZaiko() {
   wrap.style.display = '';
   sel.style.display = 'none';
   sel.innerHTML = '';
+  hint.textContent = 'Consultando Zaiko…';
 
-  if (_zaikoLibrosCache === null) {
-    hint.textContent = 'Consultando Zaiko…';
-    return; // _cargarCatalogoZaikoLibros() vuelve a llamar esta función al terminar.
-  }
+  const items = await _buscarZaikoCatalogo('LIBRO', titulo, 20);
+  if (document.getElementById('npl-libro-titulo').value.trim() !== titulo) return; // ya escribió otra cosa mientras tanto
 
   const tituloNorm = _normalizarTextoJS(titulo);
-  const coincidencias = _zaikoLibrosCache.filter(c => _normalizarTextoJS(c.nombre) === tituloNorm);
+  const coincidencias = items.filter(c => _normalizarTextoJS(c.nombre) === tituloNorm);
   const disponibles = coincidencias.filter(c => c.estado_activo === 'ACTIVO');
   _zaikoCopiasDisponibles = disponibles;
 
@@ -1252,7 +1220,7 @@ function libroBuscarDebounce() {
   clearTimeout(_libBuscarTimer);
   _libBuscarTimer = setTimeout(() => {
     _renderSugerenciasLibro();
-    _actualizarCopiasZaiko(); // filtrado local sobre _zaikoLibrosCache, sin red
+    _actualizarCopiasZaiko(); // búsqueda en vivo contra Zaiko, ya con debounce
   }, 200);
 }
 
