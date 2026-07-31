@@ -116,6 +116,8 @@ function despachar(p) {
     case "zaikoListarMateriales":  return zaikoListarMateriales(p);
     case "zaikoSalidaParcial":     return zaikoSalidaParcial(p);
     case "zaikoDevolucionParcial": return zaikoDevolucionParcial(p);
+    case "zaikoListarCatalogoPaginado": return zaikoListarCatalogoPaginado(p);
+    case "zaikoRegistrarLibro":    return zaikoRegistrarLibro(p);
     default: return { error: "Acción no reconocida: " + p.accion };
   }
 }
@@ -186,7 +188,8 @@ function _zaikoCall(action, params, esReintento) {
 }
 
 // Todas las copias de libro ya catalogadas en Zaiko (categoria
-// biblioteca, subcategoria Libros/Textos escolares), con su estado
+// biblioteca, subcategoria LIBRO -- ver 060_biblioteca_dos_subcategorias.sql,
+// antes eran Libros/Textos escolares por separado), con su estado
 // actual. Se trae TODO de una sola vez -- el filtrado por titulo
 // mientras el bibliotecario escribe se hace en el propio navegador
 // (materiales.js), sin otro viaje de red por cada letra que escribe.
@@ -194,9 +197,8 @@ function zaikoListarCopiasLibro(p) {
   try {
     var r = _zaikoCall('fn_listar_activos_biblioteca', {});
     if (!Array.isArray(r)) return { ok: false, msg: (r && r.msg) || 'No se pudo consultar Zaiko' };
-    var LIBRO_SUBCATS = { 'LIBROS': true, 'TEXTOS ESCOLARES': true };
     var copias = r.filter(function (a) {
-      return LIBRO_SUBCATS[(a.subcategoria || '').toUpperCase()];
+      return (a.subcategoria || '').toUpperCase() === 'LIBRO';
     });
     return { ok: true, copias: copias };
   } catch (e) {
@@ -263,11 +265,52 @@ function zaikoListarMateriales(p) {
   try {
     var r = _zaikoCall('fn_listar_activos_biblioteca', {});
     if (!Array.isArray(r)) return { ok: false, msg: (r && r.msg) || 'No se pudo consultar Zaiko' };
-    var LIBRO_SUBCATS = { 'LIBROS': true, 'TEXTOS ESCOLARES': true };
     var materiales = r.filter(function (a) {
-      return !LIBRO_SUBCATS[(a.subcategoria || '').toUpperCase()];
+      return (a.subcategoria || '').toUpperCase() !== 'LIBRO';
     });
     return { ok: true, materiales: materiales };
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+// Catálogo paginado de Zaiko, filtrado por subcategoría ('LIBRO' o
+// 'MATERIAL INSTITUCIONAL') — a diferencia de zaikoListarCopiasLibro/
+// zaikoListarMateriales (traen TODO de una vez, usadas solo para el
+// emparejamiento por nombre al escribir), esta es para la pestaña
+// Catálogo, que con miles de libros no puede cargar todo de golpe.
+function zaikoListarCatalogoPaginado(p) {
+  try {
+    return _zaikoCall('fn_listar_activos_biblioteca_paginado', {
+      p_subcategoria: p.subcategoria,
+      p_pagina: p.pagina || 0,
+      p_por_pagina: p.porPagina || 50,
+      p_query: p.query || ''
+    });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+// Registra un libro nuevo directo en el catálogo de Zaiko (categoria y
+// subcategoria se fuerzan del lado de Zaiko, no importa lo que se mande
+// aquí) — p.titulo/p.editorial/p.areaTematica/p.codigo/p.observacion.
+function zaikoRegistrarLibro(p) {
+  try {
+    return _zaikoCall('fn_registrar_libro_biblioteca', {
+      p_fila: {
+        nombre: p.titulo,
+        editorial: p.editorial || '',
+        area_tematica: p.areaTematica || '',
+        serial: p.codigo || '',
+        id_espacio: 'A-BIB-I',
+        area: 'ADMINISTRATIVA',
+        responsable: 'JHOHAN SEBASTIAN GARCIA GOMEZ',
+        estado_fisico: 'BUENO',
+        estado_activo: 'ACTIVO',
+        observacion: p.observacion || ''
+      }
+    });
   } catch (e) {
     return { ok: false, msg: e.toString() };
   }
@@ -2187,9 +2230,16 @@ function _crearHojaResumen(ss, sols, trabs, ventas, movs, libros, nom, ano) {
       if(d.forma_impresion==='Doble cara')hDo+=h;
     });
   });
+  // Recibidas/Impresas son acumulativos: el flujo es pendiente -> recibido
+  // -> impreso -> entregado, así que una solicitud ya entregada también
+  // pasó por recibida e impresa. Contar solo el estado actual subestimaba
+  // ambos conteos a medida que las solicitudes avanzaban (ej. "Recibidas: 0"
+  // en un mes donde 120 solicitudes ya llegaron hasta entregado).
+  var totRecibidas = cnt.recibido + cnt.impreso + cnt.entregado;
+  var totImpresas  = cnt.impreso + cnt.entregado;
   fHdr(r++, 'SOLICITUDES DEL MES', '#334155', '#FFFFFF');
   fKpiLbl(r++, ['Pendientes','Recibidas','Impresas','Entregadas','Canceladas']);
-  fKpiVal(r++, [cnt.pendiente,cnt.recibido,cnt.impreso,cnt.entregado,cnt.cancelado],
+  fKpiVal(r++, [cnt.pendiente,totRecibidas,totImpresas,cnt.entregado,cnt.cancelado],
     ['#FEF9C3','#DBEAFE','#EDE9FE','#DCFCE7','#FEE2E2']);
   sh.getRange(r,1).setValue('Total solicitudes').setFontWeight('bold').setBackground('#F1F5F9');
   sh.getRange(r,2).setValue(sols.length).setFontWeight('bold').setFontSize(13).setHorizontalAlignment('center');

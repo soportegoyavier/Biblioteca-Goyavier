@@ -1154,6 +1154,50 @@
   </div>
 </div>
 
+<!-- MODAL: AGREGAR LIBRO AL CATÁLOGO (Zaiko) -->
+<div class="mo" id="modal-agregar-libro">
+  <div class="mc" style="max-width:520px">
+    <div class="mh">
+      <div class="mh-ico def"><i class="fa fa-book" style="color:var(--muted)"></i></div>
+      <div class="mh-info"><h3>Agregar libro al catálogo</h3></div>
+      <button class="btn-cls" onclick="cerrarModal('modal-agregar-libro')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
+        Se crea un ejemplar nuevo directo en el inventario oficial de Zaiko.
+      </p>
+      <div class="fgroup">
+        <label>Título *</label>
+        <input type="text" id="al-titulo" class="fc" placeholder="Ej: Matemáticas 5">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="fgroup">
+          <label>Editorial</label>
+          <input type="text" id="al-editorial" class="fc">
+        </div>
+        <div class="fgroup">
+          <label>Área temática</label>
+          <input type="text" id="al-area" class="fc" placeholder="Ej: Matemáticas">
+        </div>
+      </div>
+      <div class="fgroup">
+        <label>Código</label>
+        <input type="text" id="al-codigo" class="fc">
+      </div>
+      <div class="fgroup">
+        <label>Observaciones</label>
+        <textarea id="al-obs" class="fc" rows="2" placeholder="Notas adicionales..."></textarea>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-agregar-libro')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-agregar-libro-guardar" onclick="guardarLibroZaiko()">
+        <i class="fa fa-circle-check fa-sm"></i> Guardar en Zaiko
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: CARGAR CONTEO FÍSICO A ZAIKO -->
 <div class="mo" id="modal-conteo-zaiko">
   <div class="mc" style="max-width:640px">
@@ -1323,7 +1367,7 @@
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>
 <script src="js/colaboradores.js?v=9"></script>
-<script src="js/materiales.js?v=13"></script>
+<script src="js/materiales.js?v=14"></script>
 <script src="js/auditoria.js?v=5"></script>
 <script src="js/modals.js?v=10"></script>
 </body>

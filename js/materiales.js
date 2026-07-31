@@ -62,7 +62,7 @@ function matFiltrarDebounce() {
   clearTimeout(_matBuscarTimer);
   _matBuscarTimer = setTimeout(() => {
     _matFiltro = document.getElementById('mat-buscar').value.trim();
-    if (_matTab === 'catalogo')    renderCatalogoMateriales();
+    if (_matTab === 'catalogo')    { _catPagina = 0; renderCatalogoMateriales(); }
     else if (_matTab === 'libros') renderLibros();
     else                           renderMovimientos();
   }, 300);
@@ -132,51 +132,102 @@ function _badgePrestamo(r) {
   return badge('activo');
 }
 
-// ── CATÁLOGO DE MATERIALES (fuente: Zaiko) ─────────────────────
+// ── CATÁLOGO (fuente: Zaiko) ────────────────────────────────────
 // El catálogo real vive en Zaiko (inventario oficial, categoría
-// biblioteca) — esta pestaña es una vista de lo que ya existe allá,
-// no un catálogo propio de Biblioteca. "Agregar" abre el mismo flujo
-// que carga el conteo físico en Zaiko (abrirConteoZaiko): agregar un
-// material nuevo ES crearlo en Zaiko, sin importar si luego se usa
-// desde Biblioteca o directo en Zaiko.
+// biblioteca, dos subcategorías: LIBRO / MATERIAL INSTITUCIONAL, ver
+// 060_biblioteca_dos_subcategorias.sql) — esta pestaña es una vista
+// de lo que ya existe allá, no un catálogo propio de Biblioteca.
+// Paginado de verdad (fn_listar_activos_biblioteca_paginado) porque
+// cargar todo de una vez con miles de libros vuelve lenta la pantalla.
+let _catSubTab  = 'material'; // 'libro' | 'material'
+let _catPagina  = 0;
+const _CAT_POR_PAGINA = 20;
+let _catTotal   = 0;
+
 function _badgeEstadoZaikoMaterial(estado) {
   const m = { ACTIVO: ['b-recibido', 'Activo'], AGOTADO: ['b-cancelado', 'Agotado'], 'DADO DE BAJA': ['b-cancelado', 'Dado de baja'] };
   const [cls, txt] = m[estado] || ['b-pendiente', estado || '—'];
   return `<span class="badge ${cls}">${txt}</span>`;
 }
 
+function cambiarCatSubTab(sub) {
+  _catSubTab = sub;
+  _catPagina = 0;
+  renderCatalogoMateriales();
+}
+
+function _catCambiarPagina(delta) {
+  _catPagina = Math.max(0, _catPagina + delta);
+  renderCatalogoMateriales();
+}
+
 async function renderCatalogoMateriales(forzar = false) {
   const el = document.getElementById('mat-content');
   el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   try {
-    if (forzar || _zaikoMaterialesCache === null) await _cargarCatalogoZaikoMateriales();
-    let rows = _zaikoMaterialesCache || [];
-    if (_matFiltro) {
-      const low = _matFiltro.toLowerCase();
-      rows = rows.filter(r => (r.nombre || '').toLowerCase().includes(low));
-    }
+    const subcategoria = _catSubTab === 'libro' ? 'LIBRO' : 'MATERIAL INSTITUCIONAL';
+    const r = await gasCall('zaikoListarCatalogoPaginado', {
+      subcategoria, pagina: _catPagina, porPagina: _CAT_POR_PAGINA, query: _matFiltro || ''
+    });
+    if (!r.ok) throw new Error(r.msg || 'No se pudo consultar Zaiko');
+    const rows = r.items || [];
+    _catTotal = r.total || 0;
+    const totalPaginas = Math.max(1, Math.ceil(_catTotal / _CAT_POR_PAGINA));
+
+    const tabs = `
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn ${_catSubTab === 'libro' ? 'btn-primary' : 'btn-ghost'}" style="padding:6px 14px;font-size:12.5px" onclick="cambiarCatSubTab('libro')">Libros</button>
+        <button class="btn ${_catSubTab === 'material' ? 'btn-primary' : 'btn-ghost'}" style="padding:6px 14px;font-size:12.5px" onclick="cambiarCatSubTab('material')">Material institucional</button>
+      </div>`;
+
+    const addBtn = _catSubTab === 'libro'
+      ? `<button class="btn btn-primary" onclick="abrirAgregarLibro()"><i class="fa fa-plus fa-sm"></i> Agregar libro</button>`
+      : `<button class="btn btn-primary" onclick="abrirConteoZaiko()"><i class="fa fa-plus fa-sm"></i> Agregar material(es)</button>`;
+
+    const tabla = !rows.length
+      ? '<div class="empty"><div class="eico"><i class="fa fa-boxes-stacked"></i></div><p>Sin registros en Zaiko</p></div>'
+      : _catSubTab === 'libro'
+      ? `<div class="tw"><table>
+          <thead><tr><th>ID</th><th>Título</th><th>Editorial</th><th>Área temática</th><th>Código</th><th>Estado</th></tr></thead>
+          <tbody>${rows.map(m => `<tr>
+            <td class="td-id">${escHtml(m.id_activo)}</td>
+            <td>${escHtml(m.nombre)}</td>
+            <td class="td-m">${escHtml(m.editorial || '—')}</td>
+            <td class="td-m">${escHtml(m.area_tematica || '—')}</td>
+            <td class="td-m">${escHtml(m.serial || '—')}</td>
+            <td>${_badgeEstadoZaikoMaterial(m.estado_activo)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>`
+      : `<div class="tw"><table>
+          <thead><tr><th>ID</th><th>Material</th><th>Detalle</th><th>Cantidad</th><th>Estado</th></tr></thead>
+          <tbody>${rows.map(m => {
+            const extra = [m.marca, m.color, m.tamano, m.presentacion].filter(Boolean).join(' · ');
+            return `<tr>
+              <td class="td-id">${escHtml(m.id_activo)}</td>
+              <td>${escHtml(m.nombre)}</td>
+              <td class="td-m">${extra ? escHtml(extra) : '—'}</td>
+              <td class="td-m">${escHtml(m.cantidad || '0')} ${escHtml(m.unidad || 'Unidad')}</td>
+              <td>${_badgeEstadoZaikoMaterial(m.estado_activo)}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>`;
+
+    const paginacion = `
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13px;color:var(--muted)">
+        <button class="btn btn-ghost" style="padding:6px 10px" ${_catPagina <= 0 ? 'disabled' : ''} onclick="_catCambiarPagina(-1)"><i class="fa fa-chevron-left fa-xs"></i></button>
+        <span>Página ${_catPagina + 1} de ${totalPaginas} — ${_catTotal} registro(s)</span>
+        <button class="btn btn-ghost" style="padding:6px 10px" ${_catPagina + 1 >= totalPaginas ? 'disabled' : ''} onclick="_catCambiarPagina(1)"><i class="fa fa-chevron-right fa-xs"></i></button>
+      </div>`;
+
     el.innerHTML = `
-      <div class="sec-hdr"><div class="sec-title">Catálogo de materiales</div><div class="sec-hdr-line"></div></div>
+      <div class="sec-hdr"><div class="sec-title">Catálogo</div><div class="sec-hdr-line"></div></div>
       <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
         Este catálogo viene directo del inventario oficial de Zaiko — lo que agregues aquí se crea allá.
       </p>
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
-        <button class="btn btn-primary" onclick="abrirConteoZaiko()"><i class="fa fa-plus fa-sm"></i> Agregar material(es)</button>
-      </div>
-      ${!rows.length ? '<div class="empty"><div class="eico"><i class="fa fa-boxes-stacked"></i></div><p>Sin materiales registrados en Zaiko</p></div>' : `
-      <div class="tw"><table>
-        <thead><tr><th>ID</th><th>Material</th><th>Detalle</th><th>Cantidad</th><th>Estado</th></tr></thead>
-        <tbody>${rows.map(m => {
-          const extra = [m.marca, m.color, m.tamano, m.presentacion].filter(Boolean).join(' · ');
-          return `<tr>
-            <td class="td-id">${escHtml(m.id_activo)}</td>
-            <td>${escHtml(m.nombre)}</td>
-            <td class="td-m">${extra ? escHtml(extra) : '—'}</td>
-            <td class="td-m">${escHtml(m.cantidad || '0')} ${escHtml(m.unidad || 'Unidad')}</td>
-            <td>${_badgeEstadoZaikoMaterial(m.estado_activo)}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table></div>`}
+      ${tabs}
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">${addBtn}</div>
+      ${tabla}
+      ${rows.length ? paginacion : ''}
     `;
   } catch(e) {
     el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p style="color:var(--red)">${e.message}</p></div>`;
@@ -196,6 +247,44 @@ async function obtenerOCrearMaterial(nombre, unidadDefault) {
   if (error) throw error;
   _matCache.push(data);
   return data;
+}
+
+// ── AGREGAR LIBRO AL CATÁLOGO (puente Biblioteca→Zaiko) ─────────
+// Crea un ejemplar nuevo directo en Zaiko (fn_registrar_libro_biblioteca) —
+// campos propios de libro (título/editorial/área temática/código), no
+// los de material (marca/color/tamaño/presentación/cantidad).
+function abrirAgregarLibro() {
+  document.getElementById('al-titulo').value = '';
+  document.getElementById('al-editorial').value = '';
+  document.getElementById('al-area').value = '';
+  document.getElementById('al-codigo').value = '';
+  document.getElementById('al-obs').value = '';
+  document.getElementById('modal-agregar-libro').classList.add('open');
+}
+
+async function guardarLibroZaiko() {
+  const titulo = document.getElementById('al-titulo').value.trim();
+  if (!titulo) { toast('Ingresa el título', 'error'); return; }
+
+  const btn = document.getElementById('btn-agregar-libro-guardar');
+  btn.classList.add('loading'); btn.disabled = true;
+  try {
+    const r = await gasCall('zaikoRegistrarLibro', {
+      titulo,
+      editorial: document.getElementById('al-editorial').value.trim(),
+      areaTematica: document.getElementById('al-area').value.trim(),
+      codigo: document.getElementById('al-codigo').value.trim(),
+      observacion: document.getElementById('al-obs').value.trim(),
+    });
+    if (!r.ok) throw new Error(r.msg || 'Error desconocido');
+    toast('✅ Libro registrado en Zaiko', 'success');
+    cerrarModal('modal-agregar-libro');
+    if (_matTab === 'catalogo') await renderCatalogoMateriales(true);
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.classList.remove('loading'); btn.disabled = false;
+  }
 }
 
 // ── CARGAR CONTEO FÍSICO EN ZAIKO (puente Biblioteca→Zaiko) ─────
