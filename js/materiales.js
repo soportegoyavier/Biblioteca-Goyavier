@@ -163,17 +163,20 @@ async function renderCatalogoMateriales(forzar = false) {
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="abrirConteoZaiko()"><i class="fa fa-plus fa-sm"></i> Agregar material(es)</button>
       </div>
-      ${rows.length ? rows.map(m => {
-        const extra = [m.marca, m.color, m.tamano, m.presentacion].filter(Boolean).join(' · ');
-        return `
-        <div class="notif-row" style="gap:10px">
-          <div class="notif-info">
-            <div class="notif-email">${escHtml(m.nombre)} <span style="font-weight:400;color:var(--muted)">· ${escHtml(m.id_activo)}</span></div>
-            <div class="notif-tipo">${escHtml(m.cantidad || '0')} ${escHtml(m.unidad || 'Unidad')}${extra ? ' · ' + escHtml(extra) : ''}</div>
-          </div>
-          ${_badgeEstadoZaikoMaterial(m.estado_activo)}
-        </div>`;
-      }).join('') : '<p style="font-size:13px;color:var(--muted)">Sin materiales registrados en Zaiko</p>'}
+      ${!rows.length ? '<div class="empty"><div class="eico"><i class="fa fa-boxes-stacked"></i></div><p>Sin materiales registrados en Zaiko</p></div>' : `
+      <div class="tw"><table>
+        <thead><tr><th>ID</th><th>Material</th><th>Detalle</th><th>Cantidad</th><th>Estado</th></tr></thead>
+        <tbody>${rows.map(m => {
+          const extra = [m.marca, m.color, m.tamano, m.presentacion].filter(Boolean).join(' · ');
+          return `<tr>
+            <td class="td-id">${escHtml(m.id_activo)}</td>
+            <td>${escHtml(m.nombre)}</td>
+            <td class="td-m">${extra ? escHtml(extra) : '—'}</td>
+            <td class="td-m">${escHtml(m.cantidad || '0')} ${escHtml(m.unidad || 'Unidad')}</td>
+            <td>${_badgeEstadoZaikoMaterial(m.estado_activo)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`}
     `;
   } catch(e) {
     el.innerHTML = `<div class="empty"><div class="eico"><i class="fa fa-triangle-exclamation"></i></div><p style="color:var(--red)">${e.message}</p></div>`;
