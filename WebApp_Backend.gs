@@ -112,6 +112,7 @@ function despachar(p) {
     case "zaikoListarCopiasLibro": return zaikoListarCopiasLibro(p);
     case "zaikoPrestar":           return zaikoPrestar(p);
     case "zaikoDevolver":          return zaikoDevolver(p);
+    case "zaikoCargarConteo":      return zaikoCargarConteo(p);
     default: return { error: "Acción no reconocida: " + p.accion };
   }
 }
@@ -230,6 +231,21 @@ function zaikoDevolver(p) {
       p_id: p.idPrestamo,
       p_condicion: p.condicion || 'BUENO',
       p_obs: p.obs || ''
+    });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+// Carga en Zaiko el conteo físico inicial de consumibles (cartulina,
+// pintura, papel, etc.) contado desde la propia app de Biblioteca —
+// p.items: [{nombre, unidad, cantidad}, ...]. Los que queden en 0/blanco
+// se crean igual en Zaiko, marcados AGOTADO (ver 055_conteo_biblioteca_crea_agotados.sql).
+function zaikoCargarConteo(p) {
+  try {
+    return _zaikoCall('fn_cargar_conteo_biblioteca', {
+      p_items: p.items || [],
+      p_usuario: p.usuario || 'BIBLIOTECA'
     });
   } catch (e) {
     return { ok: false, msg: e.toString() };

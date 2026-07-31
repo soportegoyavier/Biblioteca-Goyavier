@@ -1154,6 +1154,41 @@
   </div>
 </div>
 
+<!-- MODAL: CARGAR CONTEO FÍSICO A ZAIKO -->
+<div class="mo" id="modal-conteo-zaiko">
+  <div class="mc" style="max-width:640px">
+    <div class="mh">
+      <div class="mh-ico def"><i class="fa fa-clipboard-list" style="color:var(--muted)"></i></div>
+      <div class="mh-info"><h3>Cargar conteo físico en Zaiko</h3></div>
+      <button class="btn-cls" onclick="cerrarModal('modal-conteo-zaiko')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px">
+        Escribe la cantidad contada de cada material. Se registra un activo en Zaiko por cada uno de la lista —
+        los que dejes en blanco o en 0 quedan igual registrados, marcados como AGOTADO. No se toca nada que ya exista en Zaiko.
+      </p>
+      <div style="max-height:56vh;overflow-y:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="position:sticky;top:0;background:var(--bg-card,#1a1a2e)">
+              <th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted)">Material</th>
+              <th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);width:120px">Unidad</th>
+              <th style="text-align:left;padding:6px 8px;font-size:11px;color:var(--muted);width:110px">Cantidad</th>
+            </tr>
+          </thead>
+          <tbody id="conteo-zaiko-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-conteo-zaiko')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-conteo-zaiko-guardar" onclick="guardarConteoZaiko()">
+        <i class="fa fa-circle-check fa-sm"></i> Guardar conteo en Zaiko
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: NUEVO PRÉSTAMO DE LIBRO -->
 <div class="mo" id="modal-prestamo-libro">
   <div class="mc" style="max-width:620px">
@@ -1277,7 +1312,7 @@
 <script src="js/notif.js?v=7"></script>
 <script src="js/reportes.js?v=8"></script>
 <script src="js/colaboradores.js?v=9"></script>
-<script src="js/materiales.js?v=6"></script>
+<script src="js/materiales.js?v=7"></script>
 <script src="js/auditoria.js?v=5"></script>
 <script src="js/modals.js?v=10"></script>
 </body>

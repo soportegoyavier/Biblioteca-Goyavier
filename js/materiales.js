@@ -150,12 +150,13 @@ async function renderCatalogoMateriales(forzar = false) {
         Este catálogo no representa existencias — solo el listado de materiales conocidos por el sistema.
         Se completa automáticamente al registrar movimientos, o puedes agregarlo aquí.
       </p>
-      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
         <input type="text" id="nuevo-material-inp" class="fc" placeholder="Nombre del material..." style="max-width:260px;margin:0"
           onkeydown="if(event.key==='Enter')agregarMaterialCatalogo()">
         <input type="text" id="nuevo-material-unidad-inp" class="fc" placeholder="Unidad por defecto (opcional)" style="max-width:180px;margin:0"
           onkeydown="if(event.key==='Enter')agregarMaterialCatalogo()">
         <button class="btn btn-primary" onclick="agregarMaterialCatalogo()"><i class="fa fa-plus fa-sm"></i> Agregar</button>
+        <button class="btn btn-ghost" onclick="abrirConteoZaiko()" style="margin-left:auto"><i class="fa fa-clipboard-list fa-sm"></i> Cargar conteo físico en Zaiko</button>
       </div>
       ${rows.length ? rows.map(m => `
         <div class="notif-row" style="gap:10px">
@@ -203,6 +204,52 @@ async function obtenerOCrearMaterial(nombre, unidadDefault) {
   if (error) throw error;
   _matCache.push(data);
   return data;
+}
+
+// ── CARGAR CONTEO FÍSICO EN ZAIKO (puente Biblioteca→Zaiko) ─────
+// Espejo best-effort — crea/actualiza el inventario oficial de Zaiko a
+// partir del catálogo real de bib_materiales. Se excluyen los que ya se
+// migraron como activos individuales (no consumibles por lote) y "prueba"
+// (dato de prueba del catálogo). No es un movimiento de Biblioteca — es
+// la carga puntual del punto de partida (cantidad actual conocida).
+const CONTEO_ZAIKO_EXCLUIR = ['marcador', 'regla para tablero', 'az carta', 'prueba'];
+
+function abrirConteoZaiko() {
+  const materiales = _matCache.filter(m =>
+    m.activo && !CONTEO_ZAIKO_EXCLUIR.includes(m.nombre.trim().toLowerCase())
+  );
+  const tbody = document.getElementById('conteo-zaiko-tbody');
+  tbody.innerHTML = materiales.map((m, i) => `
+    <tr>
+      <td style="padding:6px 8px;font-size:13px">${escHtml(m.nombre)}</td>
+      <td style="padding:6px 8px"><input class="fc" data-conteo-unidad="${i}" value="${escHtml(m.unidad_medida_default || 'Unidad')}" style="margin:0;font-size:12px"></td>
+      <td style="padding:6px 8px"><input class="fc" type="number" min="0" step="any" data-conteo-cant="${i}" placeholder="0" style="margin:0;font-size:12px"></td>
+    </tr>`).join('');
+  tbody.dataset.materiales = JSON.stringify(materiales.map(m => m.nombre));
+  document.getElementById('modal-conteo-zaiko').classList.add('open');
+}
+
+async function guardarConteoZaiko() {
+  const nombres = JSON.parse(document.getElementById('conteo-zaiko-tbody').dataset.materiales || '[]');
+  const items = nombres.map((nombre, i) => {
+    const unidEl = document.querySelector(`[data-conteo-unidad="${i}"]`);
+    const cantEl = document.querySelector(`[data-conteo-cant="${i}"]`);
+    return { nombre, unidad: unidEl ? unidEl.value : 'Unidad', cantidad: cantEl ? cantEl.value : '' };
+  });
+
+  const btn = document.getElementById('btn-conteo-zaiko-guardar');
+  btn.classList.add('loading'); btn.disabled = true;
+  try {
+    const usuario = await usuarioActualEmail();
+    const r = await gasCall('zaikoCargarConteo', { items, usuario });
+    if (!r.ok) throw new Error(r.msg || 'Error desconocido');
+    toast('✅ ' + r.creados + ' material(es) cargado(s) en Zaiko', 'success');
+    cerrarModal('modal-conteo-zaiko');
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  } finally {
+    btn.classList.remove('loading'); btn.disabled = false;
+  }
 }
 
 // ── MODAL: NUEVO MOVIMIENTO ────────────────────────────────────
