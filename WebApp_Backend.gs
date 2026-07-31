@@ -1536,10 +1536,17 @@ var _MESES_GAS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
 function configurarTriggers() {
   // Borrar triggers previos del mismo nombre para evitar duplicados
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'verificarFechasMes') ScriptApp.deleteTrigger(t);
+    if (t.getHandlerFunction() === 'verificarFechasMes' || t.getHandlerFunction() === 'verificarFinDeMesNoche') {
+      ScriptApp.deleteTrigger(t);
+    }
   });
   ScriptApp.newTrigger('verificarFechasMes').timeBased().everyDays(1).atHour(7).create();
-  Logger.log('Trigger configurado: verificarFechasMes cada dia a las 7am');
+  // El reporte mensual va aparte, en la noche (19h = 7pm) -- para que
+  // el ultimo dia del mes alcance a incluir lo que paso en toda la
+  // jornada, no solo hasta las 7am. Todo lo demas (recordatorios,
+  // alertas, limpieza) se queda en la manana, sin cambios.
+  ScriptApp.newTrigger('verificarFinDeMesNoche').timeBased().everyDays(1).atHour(19).create();
+  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm');
 }
 
 // ── Corre automáticamente cada día a las 7am ─────────────────
@@ -1550,10 +1557,6 @@ function verificarFechasMes() {
   var diasRestantes = diasEnMes - diaHoy;
   if (diasRestantes === 7) {
     _alertaFinDeMes(7, hoy);
-  }
-  if (diaHoy === diasEnMes) {
-    try { _exportarMes(hoy.getFullYear(), hoy.getMonth()); }
-    catch(e) { _notificarError('exportarMes', e.toString()); }
   }
   try { _verificarReconciliacionStorage(); }
   catch(e) { _notificarError('reconciliacionStorage', e.toString()); }
@@ -1569,6 +1572,19 @@ function verificarFechasMes() {
   catch(e) { _notificarError('recordarLibrosVencidos', e.toString()); }
   try { _alertarSolicitudesEstancadas(); }
   catch(e) { _notificarError('alertarSolicitudesEstancadas', e.toString()); }
+}
+
+// ── Corre automáticamente cada día a las 7pm — solo el reporte
+// mensual, separado de verificarFechasMes para que pueda tener su
+// propio horario (de noche, ya con la jornada terminada) sin mover
+// de horario el resto de tareas diarias.
+function verificarFinDeMesNoche() {
+  var hoy       = new Date();
+  var diasEnMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+  if (hoy.getDate() === diasEnMes) {
+    try { _exportarMes(hoy.getFullYear(), hoy.getMonth()); }
+    catch(e) { _notificarError('exportarMes', e.toString()); }
+  }
 }
 
 // ── Recordatorio de materiales vencidos (prestamo/asignacion sin

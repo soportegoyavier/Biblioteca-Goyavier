@@ -369,20 +369,38 @@ async function exportarExcelGeneral() {
   const nom = _XM[mes];
   toast('Generando Excel general...', 'info');
   try {
-    const [{ data: sols, error: e1 }, { data: trabs }] = await Promise.all([
+    const [{ data: sols, error: e1 }, { data: trabs }, { data: ventas }, { data: movs }, { data: lineas }, { data: libros }] = await Promise.all([
       _sb.from('bib_solicitudes')
         .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,tipo_copia,destinatarios,profesor,nombre_recibe,notif_impreso_en,notif_entregado_en,fecha_entrega,bib_documentos(num_hojas,tipo_impresion,forma_impresion,nombre_archivo)')
         .gte('fecha_recepcion', ini).lt('fecha_recepcion', fin)
         .order('fecha_recepcion', { ascending: true }),
       _sb.from('bib_trabajos_impresion')
         .select('solicitud_id,nombre,profesor,total_hojas,archivos,created_at')
-        .gte('created_at', ini).lt('created_at', fin)
+        .gte('created_at', ini).lt('created_at', fin),
+      _sb.from('bib_solicitudes')
+        .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,bib_trabajos_personal(id,precio_total,valor_pagado)')
+        .eq('tipo_remitente', 'personal')
+        .gte('fecha_recepcion', ini).lt('fecha_recepcion', fin)
+        .order('fecha_recepcion', { ascending: true }),
+      _sb.from('bib_movimientos')
+        .select('id,id_movimiento,tipo,colaborador_nombre,area,fecha_limite_devolucion,fecha_devolucion_real,created_at')
+        .gte('created_at', ini).lt('created_at', fin).order('created_at', { ascending: true }),
+      _sb.from('bib_movimiento_materiales')
+        .select('movimiento_id,nombre,cantidad_entregada,unidad_medida,cantidad_devuelta,bib_movimientos!inner(created_at)')
+        .gte('bib_movimientos.created_at', ini).lt('bib_movimientos.created_at', fin),
+      _sb.from('bib_prestamos_libros')
+        .select('id_prestamo,libro_titulo,tipo_prestatario,prestatario_nombre,es_institucional,fecha_limite_devolucion,fecha_devolucion_real,fecha_prestamo')
+        .gte('fecha_prestamo', ini).lt('fecha_prestamo', fin).order('fecha_prestamo', { ascending: true }),
     ]);
     if (e1) throw e1;
     const SS = sols || [];
     const TT = trabs || [];
+    const VV = ventas || [];
+    const MM = movs || [];
+    const LL = lineas || [];
+    const LIB = libros || [];
 
-    // KPIs
+    // KPIs solicitudes
     const cnt = { pendiente:0, recibido:0, impreso:0, entregado:0, cancelado:0 };
     let hTot=0, hBN=0, hCo=0, hUn=0, hDo=0;
     SS.forEach(s => {
@@ -401,6 +419,39 @@ async function exportarExcelGeneral() {
       topMap[k] = (topMap[k]||0) + (s.bib_documentos||[]).reduce((a,d)=>a+(d.num_hojas||0),0);
     });
     const topArr = Object.entries(topMap).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+    // KPIs ventas
+    let totCob=0, totRec=0;
+    VV.forEach(v => {
+      const tt = v.bib_trabajos_personal||[];
+      totCob += tt.reduce((a,t)=>a+(t.precio_total||0),0);
+      totRec += tt.reduce((a,t)=>a+(t.valor_pagado||0),0);
+    });
+
+    // KPIs movimientos de materiales y préstamos de libros
+    const hoyD = new Date(); hoyD.setHours(0,0,0,0);
+    function estadoPrestamoGen(fechaDev, fechaLim) {
+      if (fechaDev) return 'Devuelto';
+      if (fechaLim) { const l = new Date(fechaLim + 'T00:00:00'); if (l < hoyD) return 'Vencido'; }
+      return 'Activo';
+    }
+    const sidEstado = { Devuelto:'entr', Activo:'reci', Vencido:'canc' };
+    const matPorMov = new Map();
+    LL.forEach(l => {
+      if (!matPorMov.has(l.movimiento_id)) matPorMov.set(l.movimiento_id, []);
+      matPorMov.get(l.movimiento_id).push(`${l.cantidad_entregada}${l.cantidad_devuelta ? ' (dev. ' + l.cantidad_devuelta + ')' : ''} ${l.unidad_medida} de ${l.nombre}`);
+    });
+    const cntTipo = { prestamo:0, asignacion:0, consumo:0 };
+    let devueltos=0, activosMov=0, vencidosMov=0;
+    MM.forEach(m => {
+      cntTipo[m.tipo] = (cntTipo[m.tipo]||0) + 1;
+      if (m.tipo !== 'consumo') {
+        const e = estadoPrestamoGen(m.fecha_devolucion_real, m.fecha_limite_devolucion);
+        if (e === 'Devuelto') devueltos++; else if (e === 'Vencido') vencidosMov++; else activosMov++;
+      }
+    });
+    const libCnt = { estudiante:0, colaborador:0, institucional:0 };
+    LIB.forEach(l => { libCnt[l.tipo_prestatario] = (libCnt[l.tipo_prestatario]||0) + 1; });
 
     // ── HOJA 1: RESUMEN (5 columnas) ─────────────────────────
     const N1 = 5;
@@ -424,6 +475,23 @@ async function exportarExcelGeneral() {
     r1.push(_xHdr('IMPRESION DEL MES', 'sh', N1));
     r1.push(_xRow([_xC('Total hojas','String','kn'),_xC('Blanco y negro','String','kn'),_xC('Color','String','kn'),_xC('Una cara','String','kn'),_xC('Doble cara','String','kn')], 18));
     r1.push(_xRow([_xC(hTot,'Number','kv'),_xC(hBN,'Number','kn'),_xC(hCo,'Number','kn'),_xC(hUn,'Number','kn'),_xC(hDo,'Number','kn')], 30));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('VENTAS DEL MES', 'sh', N1));
+    r1.push(_xRow([_xC('Solicitudes','String','kn'),_xC('Total Cobrado','String','kn'),_xC('Total Recibido','String','kn'),_xC('Saldo','String','kn'),_xC('','String','kn')], 18));
+    r1.push(_xRow([_xC(VV.length,'Number','kv'),_xC(_xPesos(totCob),'String','pg'),_xC(_xPesos(totRec),'String','pg'),_xC(_xPesos(totCob-totRec),'String',(totCob-totRec)>0?'pr':'pg'),_xC('','String','def')], 30));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('MOVIMIENTOS DE MATERIALES', 'sh', N1));
+    r1.push(_xRow([_xC('Préstamos','String','kn'),_xC('Asignaciones','String','kn'),_xC('Consumos','String','kn'),_xC('Total','String','kn'),_xC('','String','kn')], 18));
+    r1.push(_xRow([_xC(cntTipo.prestamo,'Number','kv'),_xC(cntTipo.asignacion,'Number','kv'),_xC(cntTipo.consumo,'Number','kv'),_xC(MM.length,'Number','kvo'),_xC('','String','def')], 30));
+    r1.push(_xRow([_xC('Devueltos','String','kn'),_xC('Activos','String','kn'),_xC('Vencidos','String','kn'),_xC('','String','kn'),_xC('','String','kn')], 18));
+    r1.push(_xRow([_xC(devueltos,'Number','kvo'),_xC(activosMov,'Number','kv'),_xC(vencidosMov,'Number','kvr'),_xC('','String','def'),_xC('','String','def')], 30));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('PRESTAMOS DE LIBROS DEL MES', 'sh', N1));
+    r1.push(_xRow([_xC('Estudiantes','String','kn'),_xC('Colaboradores','String','kn'),_xC('Institucionales','String','kn'),_xC('Total','String','kn'),_xC('','String','kn')], 18));
+    r1.push(_xRow([_xC(libCnt.estudiante||0,'Number','kv'),_xC(libCnt.colaborador||0,'Number','kv'),_xC(libCnt.institucional||0,'Number','kv'),_xC(LIB.length,'Number','kvo'),_xC('','String','def')], 30));
     r1.push(_xHdr('', 'def', N1));
 
     if (topArr.length) {
@@ -500,8 +568,223 @@ async function exportarExcelGeneral() {
     }
     const s3 = _xSheet('Trabajos Impresion', [30,110,230,180,90,90,380], r3);
 
-    _xDl(`Biblioteca_General_${nom}_${ano}.xls`, [s1, s2, s3]);
+    // ── HOJA 4: VENTAS (9 columnas) ───────────────────────────
+    const H4 = ['N','Fecha','Remitente','Asunto','Estado Pago','N Trabajos','Total Cobrado','Total Recibido','Saldo'];
+    const N4 = H4.length;
+    const r4 = [];
+    r4.push(_xHdr(`VENTAS — ${nom} ${ano}`, 'tit', N4));
+    r4.push(_xRow(H4.map(h=>_xC(h,'String','vch')), 20));
+    VV.forEach((v,i) => {
+      const tt = v.bib_trabajos_personal||[];
+      const co = tt.reduce((a,t)=>a+(t.precio_total||0),0);
+      const re = tt.reduce((a,t)=>a+(t.valor_pagado||0),0);
+      const sd = co - re;
+      let estadoPago, sid;
+      if (v.estado==='cancelado')  { estadoPago='Cancelada';     sid='canc'; }
+      else if (!tt.length)         { estadoPago='Sin registrar'; sid='vsin'; }
+      else if (sd>0.005)           { estadoPago='Con deuda';     sid='vdeu'; }
+      else                         { estadoPago='Pagado';        sid='vpag'; }
+      r4.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(_xFechaC(v.fecha_recepcion),'String',sid),
+        _xC(v.remitente_email||'','String',sid), _xC(v.asunto||'','String',sid),
+        _xC(estadoPago,'String',sid), _xC(tt.length,'Number',sid),
+        _xC(_xPesos(co),'String',sid), _xC(_xPesos(re),'String',sid),
+        _xC(sd>0.005?_xPesos(sd):'—','String',sd>0.005?'vdeu':sid),
+      ], 18));
+    });
+    const s4 = _xSheet('Ventas', [30,100,220,250,110,90,130,130,130], r4);
+
+    // ── HOJA 5: MOVIMIENTOS (9 columnas) ──────────────────────
+    const H5 = ['N','ID','Tipo','Colaborador','Área','Estado','Fecha límite','Devuelto','Materiales'];
+    const N5 = H5.length;
+    const r5 = [];
+    r5.push(_xHdr(`MOVIMIENTOS — ${nom} ${ano}`, 'tit', N5));
+    r5.push(_xRow(H5.map(h => _xC(h,'String','ch')), 20));
+    const tipoLbl5 = { prestamo:'Préstamo', asignacion:'Asignación', consumo:'Consumo' };
+    MM.forEach((m,i) => {
+      const esDevolvible = m.tipo !== 'consumo';
+      const estado = esDevolvible ? estadoPrestamoGen(m.fecha_devolucion_real, m.fecha_limite_devolucion) : '—';
+      const sid = esDevolvible ? (sidEstado[estado]||'def') : (i%2===0?'def':'alt');
+      r5.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(m.id_movimiento||'','String',sid), _xC(tipoLbl5[m.tipo]||m.tipo,'String',sid),
+        _xC(m.colaborador_nombre||'','String',sid), _xC(m.area||'','String',sid), _xC(estado,'String',sid),
+        _xC(m.fecha_limite_devolucion||'','String',sid),
+        _xC(m.fecha_devolucion_real ? _xFecha(m.fecha_devolucion_real) : '','String',sid),
+        _xC((matPorMov.get(m.id)||[]).join(' | '),'String','wrap'),
+      ], 18));
+    });
+    const s5 = _xSheet('Movimientos', [30,100,90,180,140,90,100,120,320], r5);
+
+    // ── HOJA 6: PRÉSTAMOS DE LIBROS (8 columnas) ──────────────
+    const H6 = ['N','ID','Libro','Prestatario','Tipo','Institucional','Fecha límite','Devuelto'];
+    const N6 = H6.length;
+    const r6 = [];
+    r6.push(_xHdr(`PRESTAMOS DE LIBROS — ${nom} ${ano}`, 'tit', N6));
+    r6.push(_xRow(H6.map(h => _xC(h,'String','ch')), 20));
+    const tipoLibLbl6 = { estudiante:'Estudiante', colaborador:'Colaborador', institucional:'Institucional' };
+    LIB.forEach((l,i) => {
+      const estado = l.es_institucional ? '—' : estadoPrestamoGen(l.fecha_devolucion_real, l.fecha_limite_devolucion);
+      const sid = !l.es_institucional ? (sidEstado[estado]||'def') : (i%2===0?'def':'alt');
+      r6.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(l.id_prestamo||'','String',sid), _xC(l.libro_titulo||'','String',sid),
+        _xC(l.prestatario_nombre||'','String',sid), _xC(tipoLibLbl6[l.tipo_prestatario]||l.tipo_prestatario,'String',sid),
+        _xC(l.es_institucional?'Sí':'No','String',sid),
+        _xC(l.fecha_limite_devolucion||'','String',sid),
+        _xC(l.fecha_devolucion_real ? _xFecha(l.fecha_devolucion_real) : '','String',sid),
+      ], 18));
+    });
+    const s6 = _xSheet('Prestamos Libros', [30,100,220,180,110,90,100,120], r6);
+
+    _xDl(`Biblioteca_General_${nom}_${ano}.xls`, [s1, s2, s3, s4, s5, s6]);
     toast('Excel general descargado.', 'success');
+  } catch(e) { toast('Error al generar Excel: ' + e.message, 'error'); }
+}
+
+// ── EXCEL COPIAS INSTITUCIONALES ────────────────────────────
+// Mismo contenido que Excel General (Resumen + Solicitudes + Trabajos
+// de Impresion) pero solo lo institucional/general -- tipo_remitente
+// != 'personal' (eso ya tiene su propio reporte: Excel Ventas).
+async function exportarExcelInstitucionales() {
+  const ano = _ano !== undefined ? _ano : _hoy.getFullYear();
+  const mes = _mes !== undefined ? _mes : _hoy.getMonth();
+  const ini = new Date(ano, mes, 1).toISOString();
+  const fin = new Date(ano, mes + 1, 1).toISOString();
+  const nom = _XM[mes];
+  toast('Generando Excel institucionales...', 'info');
+  try {
+    const [{ data: sols, error: e1 }, { data: trabs }] = await Promise.all([
+      _sb.from('bib_solicitudes')
+        .select('id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,tipo_copia,destinatarios,profesor,nombre_recibe,notif_impreso_en,notif_entregado_en,fecha_entrega,bib_documentos(num_hojas,tipo_impresion,forma_impresion,nombre_archivo)')
+        .neq('tipo_remitente', 'personal')
+        .gte('fecha_recepcion', ini).lt('fecha_recepcion', fin)
+        .order('fecha_recepcion', { ascending: true }),
+      _sb.from('bib_trabajos_impresion')
+        .select('solicitud_id,nombre,profesor,total_hojas,archivos,created_at')
+        .gte('created_at', ini).lt('created_at', fin)
+    ]);
+    if (e1) throw e1;
+    const SS = sols || [];
+    const idsInst = new Set(SS.map(s => s.id));
+    const TT = (trabs || []).filter(t => idsInst.has(t.solicitud_id));
+
+    // KPIs
+    const cnt = { pendiente:0, recibido:0, impreso:0, entregado:0, cancelado:0 };
+    let hTot=0, hBN=0, hCo=0, hUn=0, hDo=0;
+    SS.forEach(s => {
+      cnt[s.estado] = (cnt[s.estado]||0) + 1;
+      (s.bib_documentos||[]).forEach(d => {
+        const h=d.num_hojas||0; hTot+=h;
+        if(d.tipo_impresion==='Blanco y negro') hBN+=h;
+        if(d.tipo_impresion==='Color')          hCo+=h;
+        if(d.forma_impresion==='Una cara')      hUn+=h;
+        if(d.forma_impresion==='Doble cara')    hDo+=h;
+      });
+    });
+    const topMap = {};
+    SS.filter(s=>s.estado==='entregado').forEach(s => {
+      const k = s.profesor||s.remitente_email||'Desconocido';
+      topMap[k] = (topMap[k]||0) + (s.bib_documentos||[]).reduce((a,d)=>a+(d.num_hojas||0),0);
+    });
+    const topArr = Object.entries(topMap).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+    // Recibidas/Impresas acumulativos -- ver exportarExcelGeneral.
+    const totRecibidas = cnt.recibido + cnt.impreso + cnt.entregado;
+    const totImpresas  = cnt.impreso + cnt.entregado;
+
+    // ── HOJA 1: RESUMEN (5 columnas) ─────────────────────────
+    const N1 = 5;
+    const r1 = [];
+    r1.push(_xHdr(`BIBLIOTECA GOYAVIER — Copias Institucionales · ${nom} ${ano}`, 'tit', N1));
+    r1.push(_xHdr(`Generado: ${_xFecha(new Date().toISOString())}`, 'per', N1));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('SOLICITUDES DEL MES', 'sh', N1));
+    r1.push(_xRow([_xC('Pendientes','String','kn'),_xC('Recibidas','String','kn'),_xC('Impresas','String','kn'),_xC('Entregadas','String','kn'),_xC('Canceladas','String','kn')], 18));
+    r1.push(_xRow([_xC(cnt.pendiente,'Number','kvw'),_xC(totRecibidas,'Number','kv'),_xC(totImpresas,'Number','kv'),_xC(cnt.entregado,'Number','kvo'),_xC(cnt.cancelado,'Number','kvr')], 30));
+    r1.push(_xRow([_xC('Total solicitudes','String','kn'),_xC(SS.length,'Number','kv'),_xC('','String','def'),_xC('','String','def'),_xC('','String','def')], 22));
+    r1.push(_xHdr('', 'def', N1));
+
+    r1.push(_xHdr('IMPRESION DEL MES', 'sh', N1));
+    r1.push(_xRow([_xC('Total hojas','String','kn'),_xC('Blanco y negro','String','kn'),_xC('Color','String','kn'),_xC('Una cara','String','kn'),_xC('Doble cara','String','kn')], 18));
+    r1.push(_xRow([_xC(hTot,'Number','kv'),_xC(hBN,'Number','kn'),_xC(hCo,'Number','kn'),_xC(hUn,'Number','kn'),_xC(hDo,'Number','kn')], 30));
+    r1.push(_xHdr('', 'def', N1));
+
+    if (topArr.length) {
+      r1.push(_xHdr('TOP SOLICITANTES (hojas entregadas)', 'sh', N1));
+      r1.push(_xRow([_xC('Nombre / Correo','String','ch'),_xC('Hojas','String','ch'),_xC('','String','ch'),_xC('','String','ch'),_xC('','String','ch')], 18));
+      topArr.forEach(([n,h],i) => {
+        const sid = i%2===0 ? 'def' : 'alt';
+        r1.push(_xRow([_xC(n,'String',sid),_xC(h,'Number',sid),_xC('','String',sid),_xC('','String',sid),_xC('','String',sid)], 18));
+      });
+    }
+    const s1 = _xSheet(`${nom} ${ano} - Resumen`, [220,100,100,100,100], r1);
+
+    // ── HOJA 2: SOLICITUDES (16 columnas) ────────────────────
+    const H2 = ['N','ID Sistema','Fecha Recepcion','Remitente','Asunto','Tipo','Estado','Notificar a','Total Hojas','B y N','Color','Una cara','Doble cara','Fecha Impresion','Fecha Entrega','Entregado a'];
+    const N2 = H2.length;
+    const r2 = [];
+    r2.push(_xHdr(`SOLICITUDES INSTITUCIONALES — ${nom} ${ano}`, 'tit', N2));
+    r2.push(_xRow(H2.map(h => _xC(h,'String','ch')), 20));
+    SS.forEach((s,i) => {
+      const docs = s.bib_documentos||[];
+      const hT = docs.reduce((a,d)=>a+(d.num_hojas||0),0);
+      const hB = docs.filter(d=>d.tipo_impresion==='Blanco y negro').reduce((a,d)=>a+(d.num_hojas||0),0);
+      const hC = docs.filter(d=>d.tipo_impresion==='Color').reduce((a,d)=>a+(d.num_hojas||0),0);
+      const hU = docs.filter(d=>d.forma_impresion==='Una cara').reduce((a,d)=>a+(d.num_hojas||0),0);
+      const hD = docs.filter(d=>d.forma_impresion==='Doble cara').reduce((a,d)=>a+(d.num_hojas||0),0);
+      const dest = Array.isArray(s.destinatarios) ? s.destinatarios.map(d=>typeof d==='string'?d:(d.nombre||d.email)).join(', ') : '';
+      const sid  = _SID[s.estado] || (i%2===0?'def':'alt');
+      r2.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(s.id_solicitud||'','String',sid), _xC(_xFecha(s.fecha_recepcion),'String',sid),
+        _xC(s.remitente_email||'','String',sid), _xC(s.asunto||'','String',sid),
+        _xC(s.tipo_copia||'General','String',sid),
+        _xC((s.estado||'')[0].toUpperCase()+(s.estado||'').slice(1),'String',sid),
+        _xC(dest,'String',sid),
+        _xC(hT,'Number',sid),_xC(hB,'Number',sid),_xC(hC,'Number',sid),_xC(hU,'Number',sid),_xC(hD,'Number',sid),
+        _xC(_xFechaC(s.notif_impreso_en),'String',sid),
+        _xC(_xFechaC(s.fecha_entrega||s.notif_entregado_en),'String',sid),
+        _xC(s.nombre_recibe||'','String',sid),
+      ], 18));
+    });
+    r2.push(_xRow([
+      _xC('TOTAL','String','tot'),_xC('','String','tot'),_xC('','String','tot'),
+      _xC('','String','tot'),_xC('','String','tot'),_xC('','String','tot'),_xC(SS.length,'Number','tot'),
+      _xC('','String','tot'),_xC(hTot,'Number','tot'),
+      _xC(hBN,'Number','tot'),_xC(hCo,'Number','tot'),_xC(hUn,'Number','tot'),_xC(hDo,'Number','tot'),
+      _xC('','String','tot'),_xC('','String','tot'),_xC('','String','tot'),
+    ], 22));
+    const s2 = _xSheet('Solicitudes', [30,110,120,200,220,100,90,240,80,70,70,80,85,115,115,180], r2);
+
+    // ── HOJA 3: TRABAJOS DE IMPRESION (7 columnas) ────────────
+    const H3 = ['N','ID Solicitud','Nombre del Trabajo','Colaborador','Total Hojas','N Archivos','Archivos (detalle)'];
+    const N3 = H3.length;
+    const solMap = new Map(SS.map(s=>[s.id, s.id_solicitud]));
+    const r3 = [];
+    r3.push(_xHdr(`TRABAJOS DE IMPRESION — ${nom} ${ano}`, 'tit', N3));
+    r3.push(_xRow(H3.map(h => _xC(h,'String','ch')), 20));
+    TT.forEach((t,i) => {
+      const arch = Array.isArray(t.archivos) ? t.archivos : [];
+      const det  = arch.map(a=>`${a.nombre} (${a.copias||0}c x ${a.paginas||0}p, ${a.tipo_impresion||''}, ${a.tamano_hoja||''})`).join(' | ');
+      const sid  = i%2===0 ? 'def' : 'alt';
+      r3.push(_xRow([
+        _xC(i+1,'Number',sid), _xC(solMap.get(t.solicitud_id)||'','String',sid),
+        _xC(t.nombre||'','String',sid), _xC(t.profesor||'','String',sid),
+        _xC(t.total_hojas||0,'Number',sid), _xC(arch.length,'Number',sid),
+        _xC(det,'String','wrap'),
+      ], 18));
+    });
+    if (TT.length) {
+      r3.push(_xRow([
+        _xC('TOTAL','String','tot'),_xC('','String','tot'),_xC('','String','tot'),_xC('','String','tot'),
+        _xC(TT.reduce((a,t)=>a+(t.total_hojas||0),0),'Number','tot'),
+        _xC(TT.reduce((a,t)=>a+(Array.isArray(t.archivos)?t.archivos.length:0),0),'Number','tot'),
+        _xC('','String','tot'),
+      ], 22));
+    }
+    const s3 = _xSheet('Trabajos Impresion', [30,110,230,180,90,90,380], r3);
+
+    _xDl(`Biblioteca_Institucionales_${nom}_${ano}.xls`, [s1, s2, s3]);
+    toast('Excel institucionales descargado.', 'success');
   } catch(e) { toast('Error al generar Excel: ' + e.message, 'error'); }
 }
 
