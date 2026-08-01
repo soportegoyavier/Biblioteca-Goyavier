@@ -453,6 +453,8 @@ function abrirModalMovimiento() {
   _matSugerenciasActuales = [];
   document.getElementById('nm-mat-sugerencias').style.display = 'none';
   document.getElementById('nm-mat-sugerencias').innerHTML = '';
+  document.getElementById('nm-mat-cantidad').removeAttribute('max');
+  document.getElementById('nm-mat-stock-hint').textContent = '';
   renderListaMaterialesTemp();
   onCambioTipoMovimiento();
   document.getElementById('modal-movimiento').classList.add('open');
@@ -513,7 +515,7 @@ async function _renderSugerenciasMaterial() {
     return;
   }
   panel.innerHTML = `<div class="ss-list">${_matSugerenciasActuales.map(m => `
-    <div class="ss-opt" onclick="_seleccionarMaterialSugerido('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
+    <div class="ss-opt" onclick="_seleccionarMaterialSugerido('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)} · disponibles: ${escHtml(m.cantidad)} ${escHtml(m.unidad || '')}</span></div>
   `).join('')}</div>`;
   panel.style.display = 'block';
 }
@@ -528,6 +530,9 @@ function _seleccionarMaterialSugerido(idActivo) {
   if (m.tamano)        document.getElementById('nm-mat-tamano').value = m.tamano;
   if (m.presentacion)  document.getElementById('nm-mat-presentacion').value = m.presentacion;
   document.getElementById('nm-mat-sugerencias').style.display = 'none';
+  const cantInput = document.getElementById('nm-mat-cantidad');
+  cantInput.max = m.cantidad;
+  document.getElementById('nm-mat-stock-hint').textContent = `Disponibles en Zaiko: ${m.cantidad} ${m.unidad || ''}`;
 }
 
 // ── PUENTE ZAIKO PARA MATERIALES (espejo best-effort) ──────────
@@ -600,7 +605,9 @@ async function agregarLineaMaterial() {
   });
   document.getElementById('nm-mat-nombre').value = '';
   document.getElementById('nm-mat-cantidad').value = '';
+  document.getElementById('nm-mat-cantidad').removeAttribute('max');
   document.getElementById('nm-mat-unidad').value = '';
+  document.getElementById('nm-mat-stock-hint').textContent = '';
   _limpiarNmMatExtra();
   document.getElementById('nm-mat-extra').style.display = 'none';
   document.getElementById('nm-mat-extra-ico').className = 'fa fa-plus fa-xs';
