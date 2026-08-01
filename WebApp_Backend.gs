@@ -1638,9 +1638,9 @@ function configurarTriggers() {
   // el ultimo dia del mes alcance a incluir lo que paso en toda la
   // jornada, no solo hasta las 7am. Todo lo demas (recordatorios,
   // alertas, limpieza) se queda en la manana, sin cambios.
-  ScriptApp.newTrigger('_procesarCorreosPendientesZaiko').timeBased().everyMinutes(30).create();
+  ScriptApp.newTrigger('_procesarCorreosPendientesZaiko').timeBased().everyMinutes(5).create();
   ScriptApp.newTrigger('verificarFinDeMesNoche').timeBased().everyDays(1).atHour(19).create();
-  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm, _procesarCorreosPendientesZaiko cada 30 min');
+  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm, _procesarCorreosPendientesZaiko cada 5 min');
 }
 
 // ── Corre automáticamente cada día a las 7am ─────────────────
