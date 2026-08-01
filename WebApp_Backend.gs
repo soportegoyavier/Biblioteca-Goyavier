@@ -351,6 +351,27 @@ function zaikoDevolucionParcial(p) {
   }
 }
 
+// Lista correos pendientes por procesar de acciones hechas DIRECTO en
+// Zaiko sobre un activo de biblioteca (ver 068_cola_correos_biblioteca.sql
+// en el repo de Zaiko). Usado solo por _procesarCorreosPendientesZaiko().
+function zaikoListarCorreosPendientes() {
+  try {
+    var r = _zaikoCall('fn_listar_correos_pendientes_biblioteca', {});
+    if (!Array.isArray(r)) return { ok: false, msg: (r && r.msg) || 'No se pudo consultar Zaiko' };
+    return { ok: true, pendientes: r };
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
+function zaikoMarcarCorreoProcesado(id) {
+  try {
+    return _zaikoCall('fn_marcar_correo_procesado_biblioteca', { p_id: id });
+  } catch (e) {
+    return { ok: false, msg: e.toString() };
+  }
+}
+
 // ── Centro de Salud (Fase 2): lo único que solo Apps Script puede ver
 // sobre sí mismo — qué triggers existen y bajo qué cuenta corre. NO
 // incluye ejecuciones fallidas/en curso: eso requiere habilitar la
@@ -1310,6 +1331,40 @@ function enviarCorreo(params) {
           "[BIBLIOTECA]\nColegio Goyavier";
         break;
 
+      case "zaiko_accion_biblioteca":
+        // Acción hecha DIRECTO en Zaiko (no vía esta app) sobre un activo de
+        // biblioteca -- Zaiko no genera su propio correo/acta para estos
+        // casos (ver 9d1bae7/9d345f4 en el repo de Zaiko), en vez de eso
+        // encola el aviso y este cron lo procesa (ver
+        // _procesarCorreosPendientesZaiko). Caso raro/excepcional -- el
+        // flujo normal sigue siendo esta misma app.
+        var _tipoZaikoLbl = { PRESTAMO:'Préstamo', ASIGNACION:'Asignación permanente',
+                               DEVOLUCION:'Devolución', MANTENIMIENTO:'Mantenimiento' }[(params.tipoAccion||'').toUpperCase()]
+                             || params.tipoAccion || 'Movimiento';
+        asunto = "Movimiento en inventario (Zaiko) - " + (params.nombreActivo || params.idActivo || '');
+        html = wrap("#6f42c1", "Movimiento registrado en Zaiko",
+          '<p>Hola!</p>' +
+          '<p>Se registró directamente en el sistema de inventario (Zaiko) el siguiente movimiento sobre un ítem de la Biblioteca:</p>' +
+          '<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%">' +
+          fila("Tipo:", _tipoZaikoLbl) +
+          fila("Activo:", (params.nombreActivo || '—') + ' (' + (params.idActivo || '—') + ')') +
+          (params.motivo ? fila("Motivo:", params.motivo) : "") +
+          (params.observacion ? fila("Observación:", params.observacion) : "") +
+          fila("Registrado por:", params.usuarioZaiko || '—') +
+          '</table>' +
+          '<p style="background:#f5f0ff;border-left:3px solid #6f42c1;padding:12px 16px;border-radius:4px;margin:16px 0">' +
+          'Este aviso viene del inventario oficial (Zaiko), no de un movimiento registrado en Biblioteca.</p>');
+        plain =
+          "Movimiento registrado en Zaiko\n\n" +
+          "Se registro directamente en el sistema de inventario (Zaiko) el siguiente movimiento sobre un item de la Biblioteca.\n\n" +
+          "Tipo: " + _tipoZaikoLbl + "\n" +
+          "Activo: " + (params.nombreActivo || '') + " (" + (params.idActivo || '') + ")\n" +
+          (params.motivo ? "Motivo: " + params.motivo + "\n" : "") +
+          (params.observacion ? "Observacion: " + params.observacion + "\n" : "") +
+          "Registrado por: " + (params.usuarioZaiko || '') + "\n\n" +
+          "[BIBLIOTECA]\nColegio Goyavier";
+        break;
+
       default:
         return { ok: false, error: "Tipo de correo no reconocido: " + params.tipo };
     }
@@ -1532,11 +1587,49 @@ function validarEmail(email) {
 var _MESES_GAS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                   'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
+// ── Correos pendientes de acciones directas en Zaiko sobre biblioteca ──
+// Caso raro/excepcional: alguien hace un prestamo/devolucion/asignacion/
+// mantenimiento directo en Zaiko (no en esta app) sobre un activo de
+// biblioteca. Zaiko no genera su propio correo para eso (ver 9d1bae7,
+// 9d345f4 en el repo de Zaiko) -- en vez de eso encola el aviso, y este
+// cron lo revisa cada rato y lo manda con el sistema de correo de
+// Biblioteca. No bloquea nada si Zaiko no responde -- best-effort.
+function _procesarCorreosPendientesZaiko() {
+  var r = zaikoListarCorreosPendientes();
+  if (!r.ok) { Logger.log('_procesarCorreosPendientesZaiko: ' + r.msg); return; }
+  (r.pendientes || []).forEach(function(p) {
+    try {
+      var destinatario = p.destinatario_email || '';
+      if (!validarEmail(destinatario)) {
+        // Sin destinatario valido no hay a quien avisar -- se marca
+        // procesado igual para no reintentar esta fila para siempre.
+        zaikoMarcarCorreoProcesado(p.id);
+        return;
+      }
+      var res = enviarCorreo({
+        tipo: 'zaiko_accion_biblioteca',
+        destinatario: destinatario,
+        tipoAccion: p.tipo,
+        idActivo: p.id_activo,
+        nombreActivo: p.nombre_activo,
+        motivo: p.motivo,
+        observacion: p.observacion,
+        usuarioZaiko: p.usuario,
+      });
+      if (res && res.ok) zaikoMarcarCorreoProcesado(p.id);
+      // si falla, se deja sin marcar -- se reintenta en la proxima corrida
+    } catch (e) {
+      Logger.log('_procesarCorreosPendientesZaiko fila ' + p.id + ': ' + e.toString());
+    }
+  });
+}
+
 // ── Ejecutar UNA VEZ para activar los triggers ────────────────
 function configurarTriggers() {
   // Borrar triggers previos del mismo nombre para evitar duplicados
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'verificarFechasMes' || t.getHandlerFunction() === 'verificarFinDeMesNoche') {
+    if (t.getHandlerFunction() === 'verificarFechasMes' || t.getHandlerFunction() === 'verificarFinDeMesNoche' ||
+        t.getHandlerFunction() === '_procesarCorreosPendientesZaiko') {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -1545,8 +1638,9 @@ function configurarTriggers() {
   // el ultimo dia del mes alcance a incluir lo que paso en toda la
   // jornada, no solo hasta las 7am. Todo lo demas (recordatorios,
   // alertas, limpieza) se queda en la manana, sin cambios.
+  ScriptApp.newTrigger('_procesarCorreosPendientesZaiko').timeBased().everyMinutes(30).create();
   ScriptApp.newTrigger('verificarFinDeMesNoche').timeBased().everyDays(1).atHour(19).create();
-  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm');
+  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm, _procesarCorreosPendientesZaiko cada 30 min');
 }
 
 // ── Corre automáticamente cada día a las 7am ─────────────────
