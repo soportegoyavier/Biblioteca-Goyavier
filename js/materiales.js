@@ -1228,6 +1228,7 @@ function abrirModalPrestamoLibro() {
   document.getElementById('npl-zaiko-copia').innerHTML = '';
   document.getElementById('npl-zaiko-hint').textContent = '';
   clearTimeout(_libBuscarTimer);
+  _libSugerenciasZaiko = [];
   document.getElementById('npl-libro-sugerencias').style.display = 'none';
   document.getElementById('npl-libro-sugerencias').innerHTML = '';
   document.getElementById('modal-prestamo-libro').classList.add('open');
@@ -1315,6 +1316,16 @@ function libroBuscarDebounce() {
   }, 200);
 }
 
+let _libSugerenciasZaiko = [];
+
+// Combina lo que Biblioteca ya conoce (bib_libros -- libros que ya se
+// prestaron alguna vez) con una busqueda en vivo contra el catalogo real
+// de Zaiko -- antes solo miraba bib_libros, asi que un titulo que existe
+// en Zaiko pero nunca se ha prestado por Biblioteca (ej. el catalogo
+// completo recien cargado) no aparecia como sugerencia, aunque
+// _actualizarCopiasZaiko() (mas abajo) si lo encontraba una vez escrito
+// el titulo completo. Mismo patron que el buscador de materiales
+// (_buscarZaikoCatalogo).
 async function _renderSugerenciasLibro() {
   const q = document.getElementById('npl-libro-titulo').value.trim();
   const panel = document.getElementById('npl-libro-sugerencias');
@@ -1324,25 +1335,45 @@ async function _renderSugerenciasLibro() {
     _libCache = data || [];
   }
   const low = q.toLowerCase();
-  const fil = _libCache.filter(l => l.titulo.toLowerCase().includes(low)).slice(0, 8);
-  if (!fil.length) {
+  const filLocal = _libCache.filter(l => l.titulo.toLowerCase().includes(low));
+  _libSugerenciasZaiko = await _buscarZaikoCatalogo('LIBRO', q, 8);
+  if (document.getElementById('npl-libro-titulo').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
+
+  const titulosLocales = new Set(filLocal.map(l => _normalizarTextoJS(l.titulo)));
+  const soloZaiko = _libSugerenciasZaiko.filter(m => !titulosLocales.has(_normalizarTextoJS(m.nombre)));
+
+  const combinados = [
+    ...filLocal.slice(0, 8).map(l => ({ tipo: 'local', id: l.id, titulo: l.titulo, extra: '' })),
+    ...soloZaiko.slice(0, 8).map(m => ({ tipo: 'zaiko', id: m.id_activo, titulo: m.nombre, extra: `· ${m.id_activo} · en Zaiko` })),
+  ].slice(0, 8);
+
+  if (!combinados.length) {
     panel.style.display = 'none';
     panel.innerHTML = '';
     return;
   }
-  panel.innerHTML = `<div class="ss-list">${fil.map(l => `
-    <div class="ss-opt" onclick="_seleccionarLibroSugerido('${l.id}')">${escHtml(l.titulo)}</div>
+  panel.innerHTML = `<div class="ss-list">${combinados.map(c => `
+    <div class="ss-opt" onclick="_seleccionarLibroSugerido('${c.tipo}','${String(c.id).replace(/'/g, "\\'")}')">${escHtml(c.titulo)} ${c.extra ? `<span style="color:var(--muted);font-size:11px">${escHtml(c.extra)}</span>` : ''}</div>
   `).join('')}</div>`;
   panel.style.display = 'block';
 }
 
-function _seleccionarLibroSugerido(id) {
-  const l = _libCache.find(x => String(x.id) === String(id));
-  if (!l) return;
-  document.getElementById('npl-libro-titulo').value = l.titulo;
-  if (l.editorial) document.getElementById('npl-libro-editorial').value = l.editorial;
-  if (l.area)      document.getElementById('npl-libro-area').value = l.area;
-  if (l.codigo)    document.getElementById('npl-libro-codigo').value = l.codigo;
+function _seleccionarLibroSugerido(tipo, id) {
+  if (tipo === 'zaiko') {
+    const m = _libSugerenciasZaiko.find(x => x.id_activo === id);
+    if (!m) return;
+    document.getElementById('npl-libro-titulo').value = m.nombre;
+    if (m.editorial)     document.getElementById('npl-libro-editorial').value = m.editorial;
+    if (m.area_tematica) document.getElementById('npl-libro-area').value = m.area_tematica;
+    if (m.serial)         document.getElementById('npl-libro-codigo').value = m.serial;
+  } else {
+    const l = _libCache.find(x => String(x.id) === String(id));
+    if (!l) return;
+    document.getElementById('npl-libro-titulo').value = l.titulo;
+    if (l.editorial) document.getElementById('npl-libro-editorial').value = l.editorial;
+    if (l.area)      document.getElementById('npl-libro-area').value = l.area;
+    if (l.codigo)    document.getElementById('npl-libro-codigo').value = l.codigo;
+  }
   document.getElementById('npl-libro-sugerencias').style.display = 'none';
   _actualizarCopiasZaiko();
 }
