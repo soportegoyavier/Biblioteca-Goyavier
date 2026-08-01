@@ -166,9 +166,10 @@ async function renderCatalogoMateriales(forzar = false) {
   el.innerHTML = '<div class="loader-wrap"><div class="loader"></div></div>';
   try {
     const subcategoria = _catSubTab === 'libro' ? 'LIBRO' : 'MATERIAL INSTITUCIONAL';
-    const r = await gasCall('zaikoListarCatalogoPaginado', {
-      subcategoria, pagina: _catPagina, porPagina: _CAT_POR_PAGINA, query: _matFiltro || ''
+    const { data: r, error: eCat } = await _sbZaiko.rpc('fn_listar_activos_biblioteca_paginado', {
+      p_subcategoria: subcategoria, p_pagina: _catPagina, p_por_pagina: _CAT_POR_PAGINA, p_query: _matFiltro || ''
     });
+    if (eCat) throw new Error(eCat.message);
     if (!r.ok) throw new Error(r.msg || 'No se pudo consultar Zaiko');
     const rows = r.items || [];
     _catTotal = r.total || 0;
@@ -543,9 +544,12 @@ function _seleccionarMaterialSugerido(idActivo) {
 // trae solo unos pocos resultados que coinciden con lo escrito.
 async function _buscarZaikoCatalogo(subcategoria, query, porPagina = 8) {
   try {
-    const r = await gasCall('zaikoListarCatalogoPaginado', { subcategoria, pagina: 0, porPagina, query });
-    if (!r.ok) { console.warn('No se pudo consultar Zaiko:', r.msg); return []; }
-    return r.items || [];
+    const { data, error } = await _sbZaiko.rpc('fn_listar_activos_biblioteca_paginado', {
+      p_subcategoria: subcategoria, p_pagina: 0, p_por_pagina: porPagina, p_query: query || ''
+    });
+    if (error) { console.warn('No se pudo consultar Zaiko:', error.message); return []; }
+    if (!data.ok) { console.warn('No se pudo consultar Zaiko:', data.msg); return []; }
+    return data.items || [];
   } catch (e) {
     console.warn('No se pudo consultar Zaiko:', e.message);
     return [];

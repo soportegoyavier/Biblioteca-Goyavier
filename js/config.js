@@ -4,6 +4,20 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbywOPXKEYBeM7KaAUrdPaExW0EWAHH3tLVg0gfhm2--iavwWuuIGiEOkTh7R5EYqyLd/exec';
 const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// Cliente aparte, de solo lectura, directo al Supabase de Zaiko (inventario
+// oficial) -- SOLO para consultas (catalogo, busqueda en vivo). La anon key
+// es publica por diseño (igual que la de Biblioteca arriba), protegida por
+// RLS del lado de Zaiko, no por secreto -- es la misma que ya vive expuesta
+// en el propio codigo cliente de Zaiko. Pasar por aqui en vez de por Apps
+// Script evita el round-trip de GAS (1-4s típico) en cada busqueda/pagina
+// del catalogo. Los movimientos que ESCRIBEN en Zaiko (salida, devolucion,
+// conteo, prestamo de libro) siguen yendo por gasCall — RLS de Zaiko no deja
+// escribir con la anon key, solo con el JWT de servicio que vive en Apps
+// Script (Script Properties, nunca en el navegador).
+const ZAIKO_SUPABASE_URL      = 'https://uimmarckhwnsrlkiexgs.supabase.co';
+const ZAIKO_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVpbW1hcmNraHduc3Jsa2lleGdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MDQ1OTUsImV4cCI6MjA5NjE4MDU5NX0.Qk7gQ_RYKoNXQHJx9MkNA86Wts6sSp-fUWYkfAFxQwU';
+const _sbZaiko = supabase.createClient(ZAIKO_SUPABASE_URL, ZAIKO_SUPABASE_ANON_KEY);
+
 const _hoy = new Date();
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
                'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
