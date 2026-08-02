@@ -1590,9 +1590,35 @@ async function eliminarPrestamoLibro() {
   if (!_libDetalleId) return;
   if (!confirm('¿Eliminar este préstamo? Esta acción no se puede deshacer.')) return;
   try {
+    const { data: lib, error: eLib } = await _sb.from('bib_prestamos_libros')
+      .select('id_prestamo,fecha_devolucion_real,zaiko_activo_id,zaiko_sync_estado').eq('id', _libDetalleId).single();
+    if (eLib) throw eLib;
+
+    // Si el préstamo ya se devolvió, esa devolución ya liberó el libro en
+    // Zaiko -- no se vuelve a tocar aquí para no duplicar el efecto. Solo se
+    // libera lo que sigue "afuera" en Zaiko: prestado y sincronizado (mismo
+    // criterio que eliminarMovimiento() para materiales).
+    let restaurado = null;
+    if (!lib.fecha_devolucion_real && lib.zaiko_activo_id && lib.zaiko_sync_estado === 'SINCRONIZADO') {
+      try {
+        const rz = await gasCall('zaikoDevolver', {
+          idPrestamo: lib.id_prestamo,
+          condicion: 'BUENO',
+          obs: 'DEVOLUCION POR ELIMINACION DE PRESTAMO',
+        });
+        restaurado = !!rz.ok;
+      } catch (ze) { restaurado = false; }
+    }
+
     const { error } = await _sb.from('bib_prestamos_libros').delete().eq('id', _libDetalleId);
     if (error) throw error;
-    toast('Préstamo eliminado', 'success');
+
+    toast(
+      restaurado === false
+        ? 'Préstamo eliminado — no se pudo liberar el libro en Zaiko, revísalo manualmente'
+        : 'Préstamo eliminado',
+      restaurado === false ? 'error' : 'success'
+    );
     cerrarModal('modal-detalle-libro');
     await renderLibros();
   } catch(e) {
