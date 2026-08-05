@@ -3007,12 +3007,35 @@ function reprocesarDesde(fechaStr) {
 // sincronizar -- el checkpoint ya había avanzado antes del fix del margen
 // de 1 día en sincronizarCorreos(). Ejecutar UNA VEZ desde el editor
 // (seleccionar esta función en el desplegable de arriba → ▶️ Ejecutar) y
-// revisar Ver → Registros para confirmar. reprocesarDesde() ya es
-// idempotente (upsert por gmail_message_id, no duplica lo que ya existe),
-// así que no pasa nada si se corre más de una vez por error. Se puede
-// borrar esta función después de usarla -- es de un solo uso.
+// revisar Ver → Registros para confirmar. _upsertSolicitudDesdeMensaje ya
+// es idempotente (upsert por gmail_message_id), así que no pasa nada si se
+// corre más de una vez por error. Se puede borrar esta función después de
+// usarla -- es de un solo uso.
+//
+// v2: la primera versión llamaba a reprocesarDesde('2026/08/04') sin límite
+// superior -- intentó reprocesar TODOS los correos desde esa fecha hasta
+// hoy (varios días, muchos adjuntos) y la ejecución murió por falta de
+// memoria a mitad de camino (justo procesando el adjunto Drive de este
+// mismo correo, según el log), sin llegar a guardar nada. Esta versión
+// busca solo ese correo puntual (asunto + remitente + un único día), para
+// no repetir el mismo problema de volumen.
 function recuperarImpresionesss() {
-  return reprocesarDesde('2026/08/04');
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  var lb = _cargarListaBlanca(_url, _key);
+  var threads = GmailApp.search(
+    '-in:sent -in:trash -in:drafts after:2026/08/04 before:2026/08/05 ' +
+    'subject:impresionesss from:coordinacionpreescolar@colegiogoyavier.edu.co', 0, 20);
+  if (!threads.length) { Logger.log('No se encontró ningún correo con ese asunto/remitente/fecha.'); return; }
+  var procesados = 0;
+  threads.forEach(function(t) {
+    t.getMessages().forEach(function(msg) {
+      Logger.log('Encontrado: ' + msg.getFrom() + ' | ' + msg.getSubject() + ' | ' + msg.getDate());
+      var res = _upsertSolicitudDesdeMensaje(msg, _url, _key, lb);
+      Logger.log('Resultado: ' + res.accion + ' id=' + res.solId);
+      procesados++;
+    });
+  });
+  Logger.log('=== LISTO: ' + procesados + ' correo(s) procesado(s)');
 }
 
 // ── Lógica interna compartida ─────────────────────────────────
