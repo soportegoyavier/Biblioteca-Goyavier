@@ -3002,6 +3002,19 @@ function reprocesarDesde(fechaStr) {
   }
 }
 
+// ── Recuperación puntual: correo "Fwd: Impresionesss" de
+// coordinacionpreescolar@colegiogoyavier.edu.co (4 ago) que quedó sin
+// sincronizar -- el checkpoint ya había avanzado antes del fix del margen
+// de 1 día en sincronizarCorreos(). Ejecutar UNA VEZ desde el editor
+// (seleccionar esta función en el desplegable de arriba → ▶️ Ejecutar) y
+// revisar Ver → Registros para confirmar. reprocesarDesde() ya es
+// idempotente (upsert por gmail_message_id, no duplica lo que ya existe),
+// así que no pasa nada si se corre más de una vez por error. Se puede
+// borrar esta función después de usarla -- es de un solo uso.
+function recuperarImpresionesss() {
+  return reprocesarDesde('2026/08/04');
+}
+
 // ── Lógica interna compartida ─────────────────────────────────
 function _cargarListaBlanca(url, key) {
   var res = sbGet(url, key, 'bib_remitentes_autorizados?select=email,tipo&activo=eq.true');
