@@ -3262,17 +3262,27 @@ function _procesarDriveLinks(driveLinks, msgId, maxBytes, supabaseUrl, supabaseK
       var dMime= df.getMimeType();
       var dSz  = df.getSize();
       var isGApp = dMime.indexOf('application/vnd.google-apps.') === 0;
-      if (!isGApp && dSz > maxBytes) {
+      // Los archivos nativos de Google (Doc/Sheet/Slide) NO se convierten más
+      // a PDF aquí -- getAs('application/pdf') puede consumir mucha más
+      // memoria de la que sugiere getSize() (que para estos formatos no
+      // predice nada del costo real de exportar), y un "Out of memory" en
+      // Apps Script mata la ejecución completa sin poder atraparse con
+      // try/catch -- pasó de verdad con un correo real y ahora que la
+      // sincronización corre sola cada 5 min (ver _sincronizarCorreosAutomatico),
+      // ese tipo de fallo silencioso puede repetirse solo sin que nadie se
+      // entere. Se deja el link para que el destinatario lo abra directo en
+      // Drive -- mismo criterio que ya se usaba para "no accesible".
+      if (isGApp) {
+        docs.push({ nombre_archivo: df.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
+        Logger.log('Drive link nativo de Google (solo referencia, sin exportar a PDF): ' + df.getName());
+        continue;
+      }
+      if (dSz > maxBytes) {
         docs.push({ nombre_archivo: df.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
         Logger.log('Drive link omitido (>' + Math.round(dSz/1024/1024) + 'MB): ' + df.getName());
         continue;
       }
-      var dBytes;
-      if (dMime==='application/vnd.google-apps.document'||dMime==='application/vnd.google-apps.spreadsheet'||dMime==='application/vnd.google-apps.presentation') {
-        dBytes = df.getAs('application/pdf').getBytes(); dMime='application/pdf'; dNom=dNom+'.pdf';
-      } else {
-        dBytes = df.getBlob().getBytes();
-      }
+      var dBytes = df.getBlob().getBytes();
       var dPath = msgId + "/drive_" + dl.id + "_" + dNom;
       var dResp = UrlFetchApp.fetch(supabaseUrl + "/storage/v1/object/biblioteca-adjuntos/" + dPath.split("/").map(encodeURIComponent).join("/"), {
         method:"POST", muteHttpExceptions:true,
