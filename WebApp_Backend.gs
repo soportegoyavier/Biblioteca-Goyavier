@@ -595,8 +595,25 @@ function _sincronizarCorreosImpl(params) {
   if (esMesActual) {
     var syncRes   = sbGet(SUPABASE_URL, SUPABASE_KEY, "bib_sync_estado?id=eq.1&select=ultimo_message_date");
     var ultimoChk = (Array.isArray(syncRes) && syncRes[0]) ? syncRes[0].ultimo_message_date : null;
+    // Margen de seguridad de 1 dia: el operador "after:" de Gmail solo tiene
+    // granularidad de dia (fmtGmail no manda hora), asi que un checkpoint con
+    // hora exacta ya era enganoso -- cada sync igual re-escaneaba el dia
+    // completo. El problema real era otro: ultimaFecha (y por lo tanto el
+    // checkpoint) solo avanza con mensajes NUEVOS, nunca con los ya
+    // existentes -- si un lote se llenaba de mensajes ya procesados antes de
+    // llegar a uno real, ese mensaje real quedaba fuera del lote, y si el
+    // checkpoint alcanzaba a avanzar a un dia posterior por otro correo mas
+    // reciente, el correo enterrado quedaba fuera del rango de busqueda para
+    // siempre (confirmado con un caso real: un correo nunca volvio a
+    // aparecer en bib_solicitudes ni en bib_mensajes_ignorados aunque el
+    // checkpoint ya iba muy por delante de su fecha). Restar 1 dia aqui hace
+    // que cada sync vuelva a incluir el dia anterior al del checkpoint --
+    // barato porque idsExistentes descarta los ya vistos al instante, y
+    // garantiza que un correo enterrado se siga intentando en cada corrida
+    // hasta que de verdad se capture, en vez de perderse en silencio.
+    var unDiaMs = 24 * 60 * 60 * 1000;
     query = ultimoChk
-      ? baseQuery + " after:" + fmtGmail(new Date(ultimoChk))
+      ? baseQuery + " after:" + fmtGmail(new Date(new Date(ultimoChk).getTime() - unDiaMs))
       : baseQuery + " after:" + fmtGmail(primerDia) + " before:" + fmtGmail(primerDiaSig);
   } else {
     query = baseQuery + " after:" + fmtGmail(primerDia) + " before:" + fmtGmail(primerDiaSig);
@@ -1624,12 +1641,49 @@ function _procesarCorreosPendientesZaiko() {
   });
 }
 
+// ── Sincronización automática de correos (deteccion sin depender de que
+// alguien tenga la app abierta) ────────────────────────────────
+// Hasta ahora sincronizarCorreos() SOLO se disparaba desde el boton manual
+// en la UI (js/nav.js) -- sin nadie mirando la pantalla, un correo podia
+// quedar sin detectar horas (confirmado con datos reales: un caso tardo
+// ~20h, con un hueco de sincronizacion de mas de 21h sin un solo intento).
+// Este wrapper llama a sincronizarCorreos() (misma funcion con lock que ya
+// usa el boton manual -- si alguien esta sincronizando a mano al mismo
+// tiempo, este trigger simplemente no consigue el lock y no hace nada esa
+// vuelta, se reintenta en la siguiente) en un bucle igual al del cliente
+// (js/nav.js:sincronizar()), paginando con nextOffset/parcial hasta
+// terminar el lote disponible o acercarse al limite de ejecucion de Apps
+// Script -- se corta con margen de sobra (4 min) para nunca ser la causa
+// de una ejecucion cortada a la fuerza.
+function _sincronizarCorreosAutomatico() {
+  var t0 = Date.now();
+  var MAX_MS = 4 * 60 * 1000;
+  var offset = 0, vueltas = 0, totalAgregados = 0;
+  try {
+    while (Date.now() - t0 < MAX_MS && vueltas < 30) {
+      vueltas++;
+      var res = sincronizarCorreos({ startOffset: offset, maxMessages: 8, maxMs: 20000 });
+      if (res && res.locked) { Logger.log('_sincronizarCorreosAutomatico: sincronizacion ya en curso, se omite esta vuelta'); return; }
+      if (res && res.error)  { Logger.log('_sincronizarCorreosAutomatico: ' + res.error); return; }
+      totalAgregados += (res && res.agregados) || 0;
+      if (res && res.parcial && res.nextOffset !== undefined && res.nextOffset > offset) {
+        offset = res.nextOffset;
+      } else {
+        break;
+      }
+    }
+    if (totalAgregados > 0) Logger.log('_sincronizarCorreosAutomatico: ' + totalAgregados + ' correo(s) nuevo(s) en ' + vueltas + ' vuelta(s)');
+  } catch (e) {
+    Logger.log('_sincronizarCorreosAutomatico excepcion: ' + e.toString());
+  }
+}
+
 // ── Ejecutar UNA VEZ para activar los triggers ────────────────
 function configurarTriggers() {
   // Borrar triggers previos del mismo nombre para evitar duplicados
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (t.getHandlerFunction() === 'verificarFechasMes' || t.getHandlerFunction() === 'verificarFinDeMesNoche' ||
-        t.getHandlerFunction() === '_procesarCorreosPendientesZaiko') {
+        t.getHandlerFunction() === '_procesarCorreosPendientesZaiko' || t.getHandlerFunction() === '_sincronizarCorreosAutomatico') {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -1639,8 +1693,9 @@ function configurarTriggers() {
   // jornada, no solo hasta las 7am. Todo lo demas (recordatorios,
   // alertas, limpieza) se queda en la manana, sin cambios.
   ScriptApp.newTrigger('_procesarCorreosPendientesZaiko').timeBased().everyMinutes(5).create();
+  ScriptApp.newTrigger('_sincronizarCorreosAutomatico').timeBased().everyMinutes(5).create();
   ScriptApp.newTrigger('verificarFinDeMesNoche').timeBased().everyDays(1).atHour(19).create();
-  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm, _procesarCorreosPendientesZaiko cada 5 min');
+  Logger.log('Triggers configurados: verificarFechasMes 7am, verificarFinDeMesNoche 7pm, _procesarCorreosPendientesZaiko cada 5 min, _sincronizarCorreosAutomatico cada 5 min');
 }
 
 // ── Corre automáticamente cada día a las 7am ─────────────────

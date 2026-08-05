@@ -48,24 +48,43 @@ function toast(msg, type='info', dur=4500) {
 // El backend (WebApp_Backend.gs) valida este access_token contra Supabase
 // Auth antes de ejecutar cualquier acción -- sin sesión real de
 // biblioteca@colegiogoyavier.edu.co, el endpoint responde "No autorizado".
-async function gasCall(accion, params = {}) {
+//
+// Reintentos: el patrón <script src=...> (JSONP, no fetch) hace que
+// "Error de red con GAS" salga tanto por una falla de red real como por que
+// Google tarda en arrancar una nueva ejecución del Web App bajo carga
+// (síntoma observado: aparece justo cuando el usuario reintenta varias veces
+// seguidas). Solo se reintentan fallos de transporte (el <script> no cargó, o
+// el timeout de 50s) -- nunca errores de negocio que ya llegaron como
+// respuesta válida de GAS (ej. "No autorizado"), esos no se arreglan
+// reintentando.
+async function gasCall(accion, params = {}, _intento = 0) {
+  const MAX_REINTENTOS = 2;
   const { data: { session } } = await _sb.auth.getSession();
-  return new Promise((resolve, reject) => {
-    const cb = '_gc_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-    let sc;
-    const t = setTimeout(() => {
-      delete window[cb]; sc?.remove();
-      reject(new Error('Timeout al contactar el servidor de Gmail'));
-    }, 50000);
-    window[cb] = data => {
-      clearTimeout(t); delete window[cb]; sc?.remove();
-      data?.error ? reject(new Error(data.error)) : resolve(data);
-    };
-    sc = document.createElement('script');
-    sc.src = GAS_URL + '?payload=' + encodeURIComponent(JSON.stringify({ accion, ...params, token: session?.access_token || '' })) + '&callback=' + cb;
-    sc.onerror = () => { clearTimeout(t); delete window[cb]; reject(new Error('Error de red con GAS')); };
-    document.head.appendChild(sc);
-  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const cb = '_gc_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      let sc;
+      const t = setTimeout(() => {
+        delete window[cb]; sc?.remove();
+        reject(new Error('Timeout al contactar el servidor de Gmail'));
+      }, 50000);
+      window[cb] = data => {
+        clearTimeout(t); delete window[cb]; sc?.remove();
+        data?.error ? reject(new Error(data.error)) : resolve(data);
+      };
+      sc = document.createElement('script');
+      sc.src = GAS_URL + '?payload=' + encodeURIComponent(JSON.stringify({ accion, ...params, token: session?.access_token || '' })) + '&callback=' + cb;
+      sc.onerror = () => { clearTimeout(t); delete window[cb]; reject(new Error('Error de red con GAS')); };
+      document.head.appendChild(sc);
+    });
+  } catch (e) {
+    const esFalloTransporte = e.message === 'Error de red con GAS' || e.message.indexOf('Timeout al contactar') === 0;
+    if (esFalloTransporte && _intento < MAX_REINTENTOS) {
+      await new Promise(r => setTimeout(r, 800 * (_intento + 1)));
+      return gasCall(accion, params, _intento + 1);
+    }
+    throw e;
+  }
 }
 
 // ── VER ARCHIVO EN NUEVA PESTAÑA ─────────────────────────────
