@@ -16,6 +16,27 @@ function _formatMaterialesResumen(lineas) {
   }).join(', ');
 }
 
+// ── CERRAR PANELES DE SUGERENCIAS AL HACER CLIC AFUERA ─────────
+// Los 3 buscadores en vivo (material de movimiento, libro de préstamo,
+// material de conteo físico) ahora pueden quedar abiertos con la lista
+// completa sin haber escrito nada (ver onfocus en index.html), así que
+// necesitan una forma de cerrarse aparte de elegir una opción. Este script
+// se carga una sola vez por página (no se re-ejecuta en cada login como
+// initSingleSelect() en copias.js), así que no hace falta guardia contra
+// listeners duplicados.
+document.addEventListener('click', function(e) {
+  [
+    ['nm-mat-nombre', 'nm-mat-sugerencias'],
+    ['npl-libro-titulo', 'npl-libro-sugerencias'],
+    ['cz-mat-nombre', 'cz-mat-sugerencias'],
+  ].forEach(function(pair) {
+    var input = document.getElementById(pair[0]);
+    var panel = document.getElementById(pair[1]);
+    if (!input || !panel || panel.style.display === 'none') return;
+    if (e.target !== input && !panel.contains(e.target)) panel.style.display = 'none';
+  });
+});
+
 // ── NAVEGACIÓN DESDE ALERTAS DEL DASHBOARD ─────────────────────
 async function irADetalleDesdeAlerta(tipo, id) {
   const navEl = document.querySelector('.ni[data-page="materiales"]');
@@ -332,16 +353,20 @@ function czBuscarDebounce() {
 
 let _czSugerenciasActuales = [];
 
+// q vacío ya no oculta el panel — ver comentario en _renderSugerenciasMaterial().
 async function _renderSugerenciasConteoZaiko() {
   const q = document.getElementById('cz-mat-nombre').value.trim();
   const panel = document.getElementById('cz-mat-sugerencias');
-  if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
   panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando en Zaiko…</div></div>`;
   panel.style.display = 'block';
   const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', q, 8);
   if (document.getElementById('cz-mat-nombre').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
   _czSugerenciasActuales = items.filter(m => m.estado_activo === 'ACTIVO');
-  if (!_czSugerenciasActuales.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  if (!_czSugerenciasActuales.length) {
+    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin materiales disponibles'}</div></div>`;
+    panel.style.display = 'block';
+    return;
+  }
   panel.innerHTML = `<div class="ss-list">${_czSugerenciasActuales.map(m => `
     <div class="ss-opt" onclick="_seleccionarMaterialSugeridoConteo('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
   `).join('')}</div>`;
@@ -501,18 +526,23 @@ function matBuscarDebounce() {
 
 let _matSugerenciasActuales = [];
 
+// q vacío ya NO oculta el panel — al hacer foco en el campo (ver onfocus en
+// index.html) se pide igual la primera página (fn_listar_activos_biblioteca_
+// paginado ya acepta p_query='') para que se vea una lista completa al
+// abrir, no solo mientras se escribe. Sigue sin precargar el catálogo
+// completo (sigue limitado a 8 resultados por consulta), así que no
+// reintroduce la lentitud que este buscador en vivo vino a resolver.
 async function _renderSugerenciasMaterial() {
   const q = document.getElementById('nm-mat-nombre').value.trim();
   const panel = document.getElementById('nm-mat-sugerencias');
-  if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
   panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando en Zaiko…</div></div>`;
   panel.style.display = 'block';
   const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', q, 8);
   if (document.getElementById('nm-mat-nombre').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
   _matSugerenciasActuales = items.filter(m => m.estado_activo === 'ACTIVO');
   if (!_matSugerenciasActuales.length) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
+    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin materiales disponibles'}</div></div>`;
+    panel.style.display = 'block';
     return;
   }
   panel.innerHTML = `<div class="ss-list">${_matSugerenciasActuales.map(m => `
@@ -1326,10 +1356,12 @@ let _libSugerenciasZaiko = [];
 // _actualizarCopiasZaiko() (mas abajo) si lo encontraba una vez escrito
 // el titulo completo. Mismo patron que el buscador de materiales
 // (_buscarZaikoCatalogo).
+// q vacío ya no oculta el panel — ver comentario en _renderSugerenciasMaterial().
 async function _renderSugerenciasLibro() {
   const q = document.getElementById('npl-libro-titulo').value.trim();
   const panel = document.getElementById('npl-libro-sugerencias');
-  if (!q) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando…</div></div>`;
+  panel.style.display = 'block';
   if (!_libCache.length) {
     const { data } = await _sb.from('bib_libros').select('id,titulo,editorial,area,codigo').eq('activo', true).order('titulo');
     _libCache = data || [];
@@ -1348,8 +1380,8 @@ async function _renderSugerenciasLibro() {
   ].slice(0, 8);
 
   if (!combinados.length) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
+    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin libros disponibles'}</div></div>`;
+    panel.style.display = 'block';
     return;
   }
   panel.innerHTML = `<div class="ss-list">${combinados.map(c => `

@@ -1057,7 +1057,7 @@
         <label>Materiales <span class="req">*</span></label>
         <div id="nm-mat-lista" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;position:relative">
-          <input type="text" id="nm-mat-nombre" class="fc" placeholder="Buscar o escribir material..." style="flex:2 1 200px" oninput="matBuscarDebounce()" autocomplete="off">
+          <input type="text" id="nm-mat-nombre" class="fc" placeholder="Buscar o escribir material..." style="flex:2 1 200px" oninput="matBuscarDebounce()" onfocus="matBuscarDebounce()" autocomplete="off">
           <input type="number" id="nm-mat-cantidad" class="fc" placeholder="Cant." style="flex:1 1 80px" min="0" step="any">
           <input type="text" id="nm-mat-unidad" class="fc" placeholder="Unidad" style="flex:1 1 90px">
           <button class="btn btn-ghost" onclick="agregarLineaMaterial()"><i class="fa fa-plus fa-sm"></i></button>
@@ -1218,7 +1218,7 @@
       <div class="fgroup">
         <div id="cz-lista" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;position:relative">
-          <input type="text" id="cz-mat-nombre" class="fc" placeholder="Buscar o escribir material..." style="flex:2 1 200px" oninput="czBuscarDebounce()" autocomplete="off">
+          <input type="text" id="cz-mat-nombre" class="fc" placeholder="Buscar o escribir material..." style="flex:2 1 200px" oninput="czBuscarDebounce()" onfocus="czBuscarDebounce()" autocomplete="off">
           <input type="number" id="cz-mat-cantidad" class="fc" placeholder="Cant." style="flex:1 1 80px" min="0" step="any">
           <input type="text" id="cz-mat-unidad" class="fc" placeholder="Unidad" style="flex:1 1 90px" value="Unidad">
           <button class="btn btn-ghost" onclick="agregarLineaConteoZaiko()"><i class="fa fa-plus fa-sm"></i></button>
@@ -1291,7 +1291,7 @@
 
       <div class="fgroup" style="position:relative">
         <label>Libro <span class="req">*</span></label>
-        <input type="text" id="npl-libro-titulo" class="fc" placeholder="Buscar o escribir título..." oninput="libroBuscarDebounce()" autocomplete="off">
+        <input type="text" id="npl-libro-titulo" class="fc" placeholder="Buscar o escribir título..." oninput="libroBuscarDebounce()" onfocus="libroBuscarDebounce()" autocomplete="off">
         <div id="npl-libro-sugerencias" class="ss-panel" style="top:62px"></div>
       </div>
       <div class="fg c3">
