@@ -37,6 +37,25 @@ document.addEventListener('click', function(e) {
   });
 });
 
+// ── HELPERS COMPARTIDOS: estados de los 3 buscadores en vivo contra Zaiko
+// (material de movimiento, material de conteo físico, libro de préstamo) ──
+function _sugerenciasCargando(panel, texto) {
+  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${texto}</div></div>`;
+  panel.style.display = 'block';
+}
+function _sugerenciasVacio(panel, q, tipoLabel) {
+  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin ' + tipoLabel + ' disponibles'}</div></div>`;
+  panel.style.display = 'block';
+}
+// El panel guarda en su propio dataset.q la última búsqueda ya renderizada --
+// si sigue abierto mostrando exactamente eso (ej. el usuario tabuló fuera del
+// campo y volvió sin escribir nada), reenfocar no debe repetir la consulta a
+// Zaiko; onfocus y oninput llaman a la misma función sin distinguir cuál los
+// disparó, así que el filtro va aquí.
+function _sugerenciasYaMuestra(panel, q) {
+  return panel.style.display === 'block' && panel.dataset.q === q;
+}
+
 // ── NAVEGACIÓN DESDE ALERTAS DEL DASHBOARD ─────────────────────
 async function irADetalleDesdeAlerta(tipo, id) {
   const navEl = document.querySelector('.ni[data-page="materiales"]');
@@ -353,20 +372,17 @@ function czBuscarDebounce() {
 
 let _czSugerenciasActuales = [];
 
-// q vacío ya no oculta el panel — ver comentario en _renderSugerenciasMaterial().
+// q vacío ya no oculta el panel — ver _sugerenciasVacio() más arriba.
 async function _renderSugerenciasConteoZaiko() {
   const q = document.getElementById('cz-mat-nombre').value.trim();
   const panel = document.getElementById('cz-mat-sugerencias');
-  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando en Zaiko…</div></div>`;
-  panel.style.display = 'block';
+  if (_sugerenciasYaMuestra(panel, q)) return;
+  _sugerenciasCargando(panel, 'Buscando en Zaiko…');
   const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', q, 8);
   if (document.getElementById('cz-mat-nombre').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
   _czSugerenciasActuales = items.filter(m => m.estado_activo === 'ACTIVO');
-  if (!_czSugerenciasActuales.length) {
-    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin materiales disponibles'}</div></div>`;
-    panel.style.display = 'block';
-    return;
-  }
+  panel.dataset.q = q;
+  if (!_czSugerenciasActuales.length) { _sugerenciasVacio(panel, q, 'materiales'); return; }
   panel.innerHTML = `<div class="ss-list">${_czSugerenciasActuales.map(m => `
     <div class="ss-opt" onclick="_seleccionarMaterialSugeridoConteo('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)}</span></div>
   `).join('')}</div>`;
@@ -535,16 +551,13 @@ let _matSugerenciasActuales = [];
 async function _renderSugerenciasMaterial() {
   const q = document.getElementById('nm-mat-nombre').value.trim();
   const panel = document.getElementById('nm-mat-sugerencias');
-  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando en Zaiko…</div></div>`;
-  panel.style.display = 'block';
+  if (_sugerenciasYaMuestra(panel, q)) return;
+  _sugerenciasCargando(panel, 'Buscando en Zaiko…');
   const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', q, 8);
   if (document.getElementById('nm-mat-nombre').value.trim() !== q) return; // ya escribió otra cosa mientras tanto
   _matSugerenciasActuales = items.filter(m => m.estado_activo === 'ACTIVO');
-  if (!_matSugerenciasActuales.length) {
-    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin materiales disponibles'}</div></div>`;
-    panel.style.display = 'block';
-    return;
-  }
+  panel.dataset.q = q;
+  if (!_matSugerenciasActuales.length) { _sugerenciasVacio(panel, q, 'materiales'); return; }
   panel.innerHTML = `<div class="ss-list">${_matSugerenciasActuales.map(m => `
     <div class="ss-opt" onclick="_seleccionarMaterialSugerido('${m.id_activo}')">${escHtml(m.nombre)} <span style="color:var(--muted);font-size:11px">· ${escHtml(m.id_activo)} · disponibles: ${escHtml(m.cantidad)} ${escHtml(m.unidad || '')}</span></div>
   `).join('')}</div>`;
@@ -1356,12 +1369,12 @@ let _libSugerenciasZaiko = [];
 // _actualizarCopiasZaiko() (mas abajo) si lo encontraba una vez escrito
 // el titulo completo. Mismo patron que el buscador de materiales
 // (_buscarZaikoCatalogo).
-// q vacío ya no oculta el panel — ver comentario en _renderSugerenciasMaterial().
+// q vacío ya no oculta el panel — ver _sugerenciasVacio() más arriba.
 async function _renderSugerenciasLibro() {
   const q = document.getElementById('npl-libro-titulo').value.trim();
   const panel = document.getElementById('npl-libro-sugerencias');
-  panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">Buscando…</div></div>`;
-  panel.style.display = 'block';
+  if (_sugerenciasYaMuestra(panel, q)) return;
+  _sugerenciasCargando(panel, 'Buscando…');
   if (!_libCache.length) {
     const { data } = await _sb.from('bib_libros').select('id,titulo,editorial,area,codigo').eq('activo', true).order('titulo');
     _libCache = data || [];
@@ -1379,11 +1392,8 @@ async function _renderSugerenciasLibro() {
     ...soloZaiko.slice(0, 8).map(m => ({ tipo: 'zaiko', id: m.id_activo, titulo: m.nombre, extra: `· ${m.id_activo} · en Zaiko` })),
   ].slice(0, 8);
 
-  if (!combinados.length) {
-    panel.innerHTML = `<div class="ss-list"><div class="ss-opt" style="color:var(--muted);cursor:default">${q ? 'Sin resultados para "' + escHtml(q) + '"' : 'Sin libros disponibles'}</div></div>`;
-    panel.style.display = 'block';
-    return;
-  }
+  panel.dataset.q = q;
+  if (!combinados.length) { _sugerenciasVacio(panel, q, 'libros'); return; }
   panel.innerHTML = `<div class="ss-list">${combinados.map(c => `
     <div class="ss-opt" onclick="_seleccionarLibroSugerido('${c.tipo}','${String(c.id).replace(/'/g, "\\'")}')">${escHtml(c.titulo)} ${c.extra ? `<span style="color:var(--muted);font-size:11px">${escHtml(c.extra)}</span>` : ''}</div>
   `).join('')}</div>`;

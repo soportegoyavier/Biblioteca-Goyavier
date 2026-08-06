@@ -3002,74 +3002,6 @@ function reprocesarDesde(fechaStr) {
   }
 }
 
-// ── Recuperación puntual: correo "Fwd: Impresionesss" de
-// coordinacionpreescolar@colegiogoyavier.edu.co (4 ago) que quedó sin
-// sincronizar -- el checkpoint ya había avanzado antes del fix del margen
-// de 1 día en sincronizarCorreos(). Ejecutar UNA VEZ desde el editor
-// (seleccionar esta función en el desplegable de arriba → ▶️ Ejecutar) y
-// revisar Ver → Registros para confirmar. _upsertSolicitudDesdeMensaje ya
-// es idempotente (upsert por gmail_message_id), así que no pasa nada si se
-// corre más de una vez por error. Se puede borrar esta función después de
-// usarla -- es de un solo uso.
-//
-// v2: reprocesarDesde('2026/08/04') sin límite superior intentó reprocesar
-// TODOS los correos desde esa fecha hasta hoy y murió por falta de memoria.
-// v3: acotado a este correo puntual (asunto + remitente + un solo día) y
-// aun así _upsertSolicitudDesdeMensaje volvió a morir por memoria -- dos
-// veces, incluso después de dejar de exportar Google Docs/Sheets/Slides a
-// PDF inline (ver _procesarDriveLinks). El adjunto/link que realmente
-// agota la memoria en este correo puntual no se pudo aislar con los datos
-// disponibles (el log no llega a imprimir cuál de los adjuntos es).
-// v4 (esta versión): deja de intentar descargar CUALQUIER adjunto/link de
-// Drive -- solo guarda el registro de la solicitud (remitente, asunto,
-// fecha, cuerpo). Los archivos de este correo puntual hay que revisarlos
-// a mano en Gmail esta vez; lo importante es que la solicitud deje de
-// estar invisible para Biblioteca. gmail_message_id sigue siendo la clave
-// de upsert, así que no duplica nada si se corre más de una vez.
-function recuperarImpresionesss() {
-  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
-  var lb = _cargarListaBlanca(_url, _key);
-  var threads = GmailApp.search(
-    '-in:sent -in:trash -in:drafts after:2026/08/04 before:2026/08/05 ' +
-    'subject:impresionesss from:coordinacionpreescolar@colegiogoyavier.edu.co', 0, 20);
-  if (!threads.length) { Logger.log('No se encontró ningún correo con ese asunto/remitente/fecha.'); return; }
-  var emailBib = Session.getEffectiveUser().getEmail().toLowerCase();
-  threads.forEach(function(t) {
-    t.getMessages().forEach(function(msg) {
-      var gmailMsgId = msg.getId();
-      Logger.log('Encontrado: ' + gmailMsgId + ' | ' + msg.getFrom() + ' | ' + msg.getSubject() + ' | ' + msg.getDate());
-
-      var fromRaw       = msg.getFrom();
-      var emMatch       = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(fromRaw);
-      var emailRemit    = emMatch ? emMatch[0].toLowerCase() : fromRaw.toLowerCase();
-      var tipoRemitente = lb[emailRemit] || 'personal';
-      var emailDestino  = _detectarEmailDestino(msg, emailRemit, emailBib);
-
-      var campos = {
-        gmail_message_id: gmailMsgId,
-        fecha_recepcion:  msg.getDate().toISOString(),
-        remitente_nombre: fromRaw,
-        remitente_email:  emailRemit,
-        email_destino:    emailDestino,
-        tipo_remitente:   tipoRemitente,
-        asunto:           msg.getSubject() || '(sin asunto)',
-        cuerpo:           msg.getPlainBody().substring(0, 1000)
-      };
-
-      var existing = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id');
-      if (Array.isArray(existing) && existing[0]) {
-        var okPatch = sbPatch(_url, _key, 'bib_solicitudes?id=eq.' + existing[0].id, campos);
-        Logger.log('Actualizado (sin adjuntos): id=' + existing[0].id + ' ok=' + okPatch);
-      } else {
-        campos.estado = 'pendiente';
-        var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [campos]);
-        Logger.log('Creado (sin adjuntos): ' + JSON.stringify(insertRes));
-      }
-    });
-  });
-  Logger.log('=== LISTO -- IMPORTANTE: los adjuntos de este correo NO se descargaron (para evitar el error de memoria). Revisa el correo original en Gmail para los archivos.');
-}
-
 // ── Lógica interna compartida ─────────────────────────────────
 function _cargarListaBlanca(url, key) {
   var res = sbGet(url, key, 'bib_remitentes_autorizados?select=email,tipo&activo=eq.true');
@@ -3316,15 +3248,13 @@ function _procesarDriveLinks(driveLinks, msgId, maxBytes, supabaseUrl, supabaseK
       // sincronización corre sola cada 5 min (ver _sincronizarCorreosAutomatico),
       // ese tipo de fallo silencioso puede repetirse solo sin que nadie se
       // entere. Se deja el link para que el destinatario lo abra directo en
-      // Drive -- mismo criterio que ya se usaba para "no accesible".
-      if (isGApp) {
+      // Drive -- mismo criterio que ya se usaba para "no accesible", igual
+      // que el caso de archivo demasiado grande.
+      if (isGApp || dSz > maxBytes) {
         docs.push({ nombre_archivo: df.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
-        Logger.log('Drive link nativo de Google (solo referencia, sin exportar a PDF): ' + df.getName());
-        continue;
-      }
-      if (dSz > maxBytes) {
-        docs.push({ nombre_archivo: df.getName(), tipo_mime: dMime, tamano_bytes: dSz, storage_path: null, drive_link: dl.url });
-        Logger.log('Drive link omitido (>' + Math.round(dSz/1024/1024) + 'MB): ' + df.getName());
+        Logger.log(isGApp
+          ? 'Drive link nativo de Google (solo referencia, sin exportar a PDF): ' + df.getName()
+          : 'Drive link omitido (>' + Math.round(dSz/1024/1024) + 'MB): ' + df.getName());
         continue;
       }
       var dBytes = df.getBlob().getBytes();

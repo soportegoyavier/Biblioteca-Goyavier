@@ -53,10 +53,12 @@ function toast(msg, type='info', dur=4500) {
 // "Error de red con GAS" salga tanto por una falla de red real como por que
 // Google tarda en arrancar una nueva ejecución del Web App bajo carga
 // (síntoma observado: aparece justo cuando el usuario reintenta varias veces
-// seguidas). Solo se reintentan fallos de transporte (el <script> no cargó, o
-// el timeout de 50s) -- nunca errores de negocio que ya llegaron como
-// respuesta válida de GAS (ej. "No autorizado"), esos no se arreglan
-// reintentando.
+// seguidas). También se reintenta el caso { locked: true } que devuelve
+// sincronizarCorreos() cuando ya hay otra sincronización en curso (por el
+// trigger automático o por otra pestaña) -- es justamente el caso más
+// transitorio de todos, basta esperar un momento. Nunca se reintentan otros
+// errores de negocio que ya llegaron como respuesta válida de GAS (ej. "No
+// autorizado"), esos no se arreglan reintentando.
 async function gasCall(accion, params = {}, _intento = 0) {
   const MAX_REINTENTOS = 2;
   const { data: { session } } = await _sb.auth.getSession();
@@ -70,7 +72,13 @@ async function gasCall(accion, params = {}, _intento = 0) {
       }, 50000);
       window[cb] = data => {
         clearTimeout(t); delete window[cb]; sc?.remove();
-        data?.error ? reject(new Error(data.error)) : resolve(data);
+        if (data?.error) {
+          const err = new Error(data.error);
+          if (data.locked) err.locked = true;
+          reject(err);
+        } else {
+          resolve(data);
+        }
       };
       sc = document.createElement('script');
       sc.src = GAS_URL + '?payload=' + encodeURIComponent(JSON.stringify({ accion, ...params, token: session?.access_token || '' })) + '&callback=' + cb;
@@ -79,7 +87,7 @@ async function gasCall(accion, params = {}, _intento = 0) {
     });
   } catch (e) {
     const esFalloTransporte = e.message === 'Error de red con GAS' || e.message.indexOf('Timeout al contactar') === 0;
-    if (esFalloTransporte && _intento < MAX_REINTENTOS) {
+    if ((esFalloTransporte || e.locked) && _intento < MAX_REINTENTOS) {
       await new Promise(r => setTimeout(r, 800 * (_intento + 1)));
       return gasCall(accion, params, _intento + 1);
     }
