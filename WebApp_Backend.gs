@@ -17,8 +17,23 @@ function _cfg(key) {
   return PropertiesService.getScriptProperties().getProperty(key) || "";
 }
 
-// ── Único correo autorizado a operar la app y a llamar este backend ──
-var CORREO_AUTORIZADO = 'biblioteca@colegiogoyavier.edu.co';
+// ── Correos autorizados a operar la app y a llamar este backend ──
+// Antes era un solo correo hardcodeado aquí (CORREO_AUTORIZADO). Se
+// reemplazó por la misma tabla bib_usuarios_autorizados que ya usa
+// js/auth.js para el login del frontend -- agregar/quitar accesos (ej.
+// cuentas de prueba) ya no requiere tocar código ni redesplegar este
+// script. Bug real encontrado probando con una cuenta QA (2026-08-06):
+// el frontend ya validaba contra la tabla, pero este backend seguía
+// rechazando con "No autorizado" cualquier correo que no fuera el
+// hardcodeado, incluida la propia cuenta biblioteca@colegiogoyavier.edu.co
+// si el email no coincidía en mayúsculas/minúsculas exactas.
+function _correoAutorizadoBackend(email) {
+  if (!email) return false;
+  var url = _cfg('SUPABASE_URL'), key = _cfg('SUPABASE_KEY');
+  if (!url || !key) return false;
+  var res = sbGet(url, key, 'bib_usuarios_autorizados?select=email&email=eq.' + encodeURIComponent(email.toLowerCase()) + '&activo=eq.true');
+  return Array.isArray(res) && res.length > 0;
+}
 
 // ── URL del Web App para los links de confirmación en correos ──
 // Debe coincidir SIEMPRE con GAS_URL en js/config.js. NO usar
@@ -94,7 +109,7 @@ function doGet(e) {
 
 function despachar(p) {
   var email = _emailDeSesion(p.token);
-  if (email !== CORREO_AUTORIZADO) {
+  if (!_correoAutorizadoBackend(email)) {
     return { error: 'No autorizado' };
   }
   switch (p.accion) {
