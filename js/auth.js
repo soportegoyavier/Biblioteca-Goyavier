@@ -1,12 +1,21 @@
 // ── AUTH ────────────────────────────────────────────────────
-// Biblioteca es de uso exclusivo de la cuenta institucional -- cualquier
-// otra cuenta que logre autenticarse contra Supabase (password o Google)
-// se cierra sesión de inmediato, antes de mostrar nada de la app.
-const CORREO_AUTORIZADO = 'biblioteca@colegiogoyavier.edu.co';
+// Biblioteca es de uso restringido -- cualquier cuenta que logre
+// autenticarse contra Supabase (password o Google) pero no esté en
+// bib_usuarios_autorizados (activo=true) se cierra sesión de inmediato,
+// antes de mostrar nada de la app. Antes esto era un solo correo
+// hardcodeado en este archivo (CORREO_AUTORIZADO) -- vive en la base de
+// datos para poder agregar/quitar accesos (ej. cuentas de prueba) sin
+// tocar código ni volver a desplegar.
+async function _correoAutorizado(email) {
+  const { data, error } = await _sb.from('bib_usuarios_autorizados')
+    .select('email').eq('email', (email || '').toLowerCase()).eq('activo', true).maybeSingle();
+  if (error) { console.warn('_correoAutorizado:', error.message); return false; }
+  return !!data;
+}
 
 _sb.auth.onAuthStateChange(async (_, session) => {
   if (session) {
-    if ((session.user.email || '').toLowerCase() !== CORREO_AUTORIZADO) {
+    if (!(await _correoAutorizado(session.user.email))) {
       document.getElementById('lerr').textContent = 'Esta cuenta no tiene acceso a Biblioteca.';
       await _sb.auth.signOut();
       return;
@@ -63,7 +72,10 @@ async function loginGoogle() {
       provider: 'google',
       options: {
         redirectTo: window.location.origin + window.location.pathname,
-        queryParams: { login_hint: CORREO_AUTORIZADO }
+        // Solo una sugerencia de UX para precargar el selector de cuentas de
+        // Google -- no es control de acceso (eso ya lo hace _correoAutorizado()
+        // contra la base de datos, sin importar qué cuenta se sugiera aquí).
+        queryParams: { login_hint: 'biblioteca@colegiogoyavier.edu.co' }
       }
     });
     if (error) {
