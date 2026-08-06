@@ -3012,13 +3012,20 @@ function reprocesarDesde(fechaStr) {
 // corre más de una vez por error. Se puede borrar esta función después de
 // usarla -- es de un solo uso.
 //
-// v2: la primera versión llamaba a reprocesarDesde('2026/08/04') sin límite
-// superior -- intentó reprocesar TODOS los correos desde esa fecha hasta
-// hoy (varios días, muchos adjuntos) y la ejecución murió por falta de
-// memoria a mitad de camino (justo procesando el adjunto Drive de este
-// mismo correo, según el log), sin llegar a guardar nada. Esta versión
-// busca solo ese correo puntual (asunto + remitente + un único día), para
-// no repetir el mismo problema de volumen.
+// v2: reprocesarDesde('2026/08/04') sin límite superior intentó reprocesar
+// TODOS los correos desde esa fecha hasta hoy y murió por falta de memoria.
+// v3: acotado a este correo puntual (asunto + remitente + un solo día) y
+// aun así _upsertSolicitudDesdeMensaje volvió a morir por memoria -- dos
+// veces, incluso después de dejar de exportar Google Docs/Sheets/Slides a
+// PDF inline (ver _procesarDriveLinks). El adjunto/link que realmente
+// agota la memoria en este correo puntual no se pudo aislar con los datos
+// disponibles (el log no llega a imprimir cuál de los adjuntos es).
+// v4 (esta versión): deja de intentar descargar CUALQUIER adjunto/link de
+// Drive -- solo guarda el registro de la solicitud (remitente, asunto,
+// fecha, cuerpo). Los archivos de este correo puntual hay que revisarlos
+// a mano en Gmail esta vez; lo importante es que la solicitud deje de
+// estar invisible para Biblioteca. gmail_message_id sigue siendo la clave
+// de upsert, así que no duplica nada si se corre más de una vez.
 function recuperarImpresionesss() {
   var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
   var lb = _cargarListaBlanca(_url, _key);
@@ -3026,16 +3033,41 @@ function recuperarImpresionesss() {
     '-in:sent -in:trash -in:drafts after:2026/08/04 before:2026/08/05 ' +
     'subject:impresionesss from:coordinacionpreescolar@colegiogoyavier.edu.co', 0, 20);
   if (!threads.length) { Logger.log('No se encontró ningún correo con ese asunto/remitente/fecha.'); return; }
-  var procesados = 0;
+  var emailBib = Session.getEffectiveUser().getEmail().toLowerCase();
   threads.forEach(function(t) {
     t.getMessages().forEach(function(msg) {
-      Logger.log('Encontrado: ' + msg.getFrom() + ' | ' + msg.getSubject() + ' | ' + msg.getDate());
-      var res = _upsertSolicitudDesdeMensaje(msg, _url, _key, lb);
-      Logger.log('Resultado: ' + res.accion + ' id=' + res.solId);
-      procesados++;
+      var gmailMsgId = msg.getId();
+      Logger.log('Encontrado: ' + gmailMsgId + ' | ' + msg.getFrom() + ' | ' + msg.getSubject() + ' | ' + msg.getDate());
+
+      var fromRaw       = msg.getFrom();
+      var emMatch       = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/.exec(fromRaw);
+      var emailRemit    = emMatch ? emMatch[0].toLowerCase() : fromRaw.toLowerCase();
+      var tipoRemitente = lb[emailRemit] || 'personal';
+      var emailDestino  = _detectarEmailDestino(msg, emailRemit, emailBib);
+
+      var campos = {
+        gmail_message_id: gmailMsgId,
+        fecha_recepcion:  msg.getDate().toISOString(),
+        remitente_nombre: fromRaw,
+        remitente_email:  emailRemit,
+        email_destino:    emailDestino,
+        tipo_remitente:   tipoRemitente,
+        asunto:           msg.getSubject() || '(sin asunto)',
+        cuerpo:           msg.getPlainBody().substring(0, 1000)
+      };
+
+      var existing = sbGet(_url, _key, 'bib_solicitudes?gmail_message_id=eq.' + encodeURIComponent(gmailMsgId) + '&select=id');
+      if (Array.isArray(existing) && existing[0]) {
+        var okPatch = sbPatch(_url, _key, 'bib_solicitudes?id=eq.' + existing[0].id, campos);
+        Logger.log('Actualizado (sin adjuntos): id=' + existing[0].id + ' ok=' + okPatch);
+      } else {
+        campos.estado = 'pendiente';
+        var insertRes = sbPostBatch(_url, _key, 'bib_solicitudes', [campos]);
+        Logger.log('Creado (sin adjuntos): ' + JSON.stringify(insertRes));
+      }
     });
   });
-  Logger.log('=== LISTO: ' + procesados + ' correo(s) procesado(s)');
+  Logger.log('=== LISTO -- IMPORTANTE: los adjuntos de este correo NO se descargaron (para evitar el error de memoria). Revisa el correo original en Gmail para los archivos.');
 }
 
 // ── Lógica interna compartida ─────────────────────────────────
@@ -3115,17 +3147,30 @@ function _upsertSolicitudDesdeMensaje(msg, _url, _key, listaBlanca) {
     // ninguno, nunca solo uno de los dos lados.
     var docsViejos = sbGet(_url, _key, 'bib_documentos?solicitud_id=eq.' + solId + '&select=storage_path&storage_path=not.is.null');
     if (Array.isArray(docsViejos) && docsViejos.length) {
-      var rutasViejas = docsViejos.map(function(d) { return d.storage_path; });
-      var delStorage = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos', {
-        method: 'DELETE',
-        headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json' },
-        payload: JSON.stringify({ prefixes: rutasViejas }),
-        muteHttpExceptions: true
-      });
-      if (delStorage.getResponseCode() >= 400) {
-        _auditar('sincronizacion', 'limpiar_storage_reemplazo', 'error', 'advertencia',
-          'No se pudieron borrar ' + rutasViejas.length + ' archivo(s) viejo(s) de Storage (solicitud id=' + solId + '): ' +
-          delStorage.getContentText().substring(0, 300));
+      // Solo borrar rutas viejas que NO se acaban de re-subir en `docs` (unas
+      // líneas más arriba) -- la ruta en Storage es determinística
+      // (gmailMsgId + nombre de archivo), así que reprocesar el MISMO
+      // mensaje sin cambios sube al MISMO path de antes. Sin este filtro,
+      // este paso borraba el archivo que "docs" acababa de subir, dejando
+      // bib_documentos apuntando a un path ya inexistente -- confirmado con
+      // datos reales: 4 huérfanos en la reconciliación, todos en solicitudes
+      // recién reprocesadas hoy mismo.
+      var pathsNuevos = {};
+      docs.forEach(function(d) { if (d.storage_path) pathsNuevos[d.storage_path] = true; });
+      var rutasViejas = docsViejos.map(function(d) { return d.storage_path; })
+        .filter(function(p) { return !pathsNuevos[p]; });
+      if (rutasViejas.length) {
+        var delStorage = UrlFetchApp.fetch(_url + '/storage/v1/object/biblioteca-adjuntos', {
+          method: 'DELETE',
+          headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json' },
+          payload: JSON.stringify({ prefixes: rutasViejas }),
+          muteHttpExceptions: true
+        });
+        if (delStorage.getResponseCode() >= 400) {
+          _auditar('sincronizacion', 'limpiar_storage_reemplazo', 'error', 'advertencia',
+            'No se pudieron borrar ' + rutasViejas.length + ' archivo(s) viejo(s) de Storage (solicitud id=' + solId + '): ' +
+            delStorage.getContentText().substring(0, 300));
+        }
       }
     }
     UrlFetchApp.fetch(_url + '/rest/v1/bib_documentos?solicitud_id=eq.' + solId,
