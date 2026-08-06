@@ -316,7 +316,7 @@ async function guardarLibroZaiko() {
       areaTematica: document.getElementById('al-area').value.trim(),
       codigo: document.getElementById('al-codigo').value.trim(),
       observacion: document.getElementById('al-obs').value.trim(),
-    });
+    }, { reintentarTransporte: false });
     if (!r.ok) throw new Error(r.msg || 'Error desconocido');
     toast('✅ Libro registrado en Zaiko', 'success');
     cerrarModal('modal-agregar-libro');
@@ -462,7 +462,7 @@ async function guardarConteoZaiko() {
   btn.classList.add('loading'); btn.disabled = true;
   try {
     const usuario = await usuarioActualEmail();
-    const r = await gasCall('zaikoCargarConteo', { items: _conteoZaikoTemp, usuario });
+    const r = await gasCall('zaikoCargarConteo', { items: _conteoZaikoTemp, usuario }, { reintentarTransporte: false });
     if (!r.ok) throw new Error(r.msg || 'Error desconocido');
     toast('✅ ' + r.creados + ' material(es) cargado(s) en Zaiko', 'success');
     cerrarModal('modal-conteo-zaiko');
@@ -777,7 +777,7 @@ async function guardarMovimiento() {
               notas: 'Creado automáticamente desde un movimiento de Biblioteca',
             }],
             usuario,
-          });
+          }, { reintentarTransporte: false });
           if (!rc.ok || !rc.ids || !rc.ids[0]) throw new Error(rc.msg || 'No se pudo crear el material en Zaiko');
           idActivo = rc.ids[0];
         }
@@ -788,7 +788,7 @@ async function guardarMovimiento() {
           motivo: _motivoMov,
           obs: obs || '',
           usuario,
-        });
+        }, { reintentarTransporte: false });
         await _sb.from('bib_movimiento_materiales').update({
           zaiko_activo_id: idActivo,
           zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
@@ -937,7 +937,7 @@ async function confirmarDevolucionMovimiento() {
             idPrestamo: lib.id_prestamo,
             condicion: 'BUENO',
             obs: obs || '',
-          });
+          }, { reintentarTransporte: false });
           if (!rz.ok) {
             await _sb.from('bib_prestamos_libros').update({
               zaiko_sync_estado: 'ERROR',
@@ -998,7 +998,7 @@ async function confirmarDevolucionMovimiento() {
           motivo: 'DEVOLUCION MATERIAL',
           obs: obs || '',
           usuario,
-        });
+        }, { reintentarTransporte: false });
         if (rz.ok) _okSync++;
       } catch (ze) { /* best-effort — se resume abajo */ }
     }
@@ -1079,7 +1079,7 @@ async function confirmarRetornoMaterial() {
           motivo: 'RETORNO PARCIAL MATERIAL',
           obs: obs || '',
           usuario,
-        });
+        }, { reintentarTransporte: false });
         await _sb.from('bib_materiales_retornos').update({
           zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
           zaiko_sync_detalle: rz.ok ? null : ('Retorno no reflejado: ' + (rz.msg || 'error desconocido')),
@@ -1176,7 +1176,7 @@ async function eliminarMovimiento() {
             cantidad: pendiente,
             motivo: 'DEVOLUCION POR ELIMINACION DE MOVIMIENTO',
             usuario,
-          });
+          }, { reintentarTransporte: false });
           if (rz.ok) restauradas++;
         } catch (ze) { /* best-effort — se resume en el toast final */ }
       }
@@ -1493,7 +1493,7 @@ async function guardarPrestamoLibro() {
           fechaPrestamo: new Date().toISOString(),
           fechaLimite: fechaLim || null,
           usuario,
-        });
+        }, { reintentarTransporte: false });
         await _sb.from('bib_prestamos_libros').update({
           zaiko_activo_id: copiaSel,
           zaiko_sync_estado: rz.ok ? 'SINCRONIZADO' : 'ERROR',
@@ -1647,7 +1647,7 @@ async function eliminarPrestamoLibro() {
           idPrestamo: lib.id_prestamo,
           condicion: 'BUENO',
           obs: 'DEVOLUCION POR ELIMINACION DE PRESTAMO',
-        });
+        }, { reintentarTransporte: false });
         restaurado = !!rz.ok;
       } catch (ze) { restaurado = false; }
     }

@@ -59,7 +59,20 @@ function toast(msg, type='info', dur=4500) {
 // transitorio de todos, basta esperar un momento. Nunca se reintentan otros
 // errores de negocio que ya llegaron como respuesta válida de GAS (ej. "No
 // autorizado"), esos no se arreglan reintentando.
-async function gasCall(accion, params = {}, _intento = 0) {
+//
+// reintentarTransporte=false (bug real encontrado probando con Playwright,
+// 2026-08-06): un timeout/error de red del lado del cliente NO significa que
+// el servidor no haya completado la ejecución -- GAS sigue corriendo aunque
+// el navegador ya haya abandonado el <script> tag. Para acciones de
+// escritura NO idempotentes hacia Zaiko (zaikoSalidaParcial,
+// zaikoDevolucionParcial, zaikoPrestar, zaikoDevolver, zaikoCargarConteo,
+// zaikoRegistrarLibro) esto causó una devolución duplicada: el cliente vio
+// un fallo transitorio, reintentó, y ambos intentos terminaron aplicándose
+// en Zaiko. { locked: true } sí sigue siendo seguro de reintentar siempre
+// -- ese caso es una respuesta válida de GAS que garantiza que la acción
+// todavía NO se ejecutó.
+async function gasCall(accion, params = {}, opciones = {}) {
+  const { reintentarTransporte = true, _intento = 0 } = opciones;
   const MAX_REINTENTOS = 2;
   const { data: { session } } = await _sb.auth.getSession();
   try {
@@ -87,9 +100,10 @@ async function gasCall(accion, params = {}, _intento = 0) {
     });
   } catch (e) {
     const esFalloTransporte = e.message === 'Error de red con GAS' || e.message.indexOf('Timeout al contactar') === 0;
-    if ((esFalloTransporte || e.locked) && _intento < MAX_REINTENTOS) {
+    const debeReintentar = (esFalloTransporte && reintentarTransporte) || e.locked;
+    if (debeReintentar && _intento < MAX_REINTENTOS) {
       await new Promise(r => setTimeout(r, 800 * (_intento + 1)));
-      return gasCall(accion, params, _intento + 1);
+      return gasCall(accion, params, { reintentarTransporte, _intento: _intento + 1 });
     }
     throw e;
   }
