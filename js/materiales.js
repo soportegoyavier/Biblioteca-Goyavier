@@ -599,12 +599,20 @@ async function _buscarZaikoCatalogo(subcategoria, query, porPagina = 8) {
   }
 }
 
-// A diferencia de libros, un material no tiene "copias" — si hay más de
-// un activo con el mismo nombre en Zaiko se usa el primero disponible.
+// A diferencia de libros, un material no tiene "copias". Si hay más de un
+// activo ACTIVO con el mismo nombre normalizado en Zaiko, antes se elegía
+// el primero en silencio — bug real encontrado en pruebas (2026-08-10):
+// podía elegir el ítem equivocado (ej. uno agotado en vez del que sí tiene
+// stock) sin que nadie se enterara de que había más de una coincidencia.
+// Ahora, si hay ambigüedad, se devuelve { ambiguo:true, candidatos } y el
+// llamador debe tratarlo como "no sincronizar automáticamente" — mismo
+// criterio no-bloqueante que ya se usa para "sin coincidencia".
 async function _matchZaikoMaterial(nombre) {
   const items = await _buscarZaikoCatalogo('MATERIAL INSTITUCIONAL', nombre, 5);
   const norm = _normalizarTextoJS(nombre);
-  return items.find(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO') || null;
+  const exactos = items.filter(m => _normalizarTextoJS(m.nombre) === norm && m.estado_activo === 'ACTIVO');
+  if (exactos.length > 1) return { ambiguo: true, candidatos: exactos };
+  return exactos[0] || null;
 }
 
 // Antes de guardar un movimiento (entrega = salida en Zaiko), vuelve a
@@ -643,12 +651,14 @@ async function agregarLineaMaterial() {
   const tamano       = document.getElementById('nm-mat-tamano').value.trim();
   const presentacion = document.getElementById('nm-mat-presentacion').value.trim();
   const zaikoMatch    = await _matchZaikoMaterial(nombre);
+  const zaikoAmbiguo  = zaikoMatch && zaikoMatch.ambiguo === true;
 
   _movMaterialesTemp.push({
     nombre, cantidad, unidad,
     marca: marca || null, color: color || null, tamano: tamano || null,
     presentacion: presentacion || null,
-    zaikoActivoId: zaikoMatch ? zaikoMatch.id_activo : null,
+    zaikoActivoId: zaikoAmbiguo ? null : (zaikoMatch ? zaikoMatch.id_activo : null),
+    zaikoAmbiguo: zaikoAmbiguo ? zaikoMatch.candidatos.map(c => c.id_activo) : null,
   });
   document.getElementById('nm-mat-nombre').value = '';
   document.getElementById('nm-mat-cantidad').value = '';
@@ -675,7 +685,9 @@ function renderListaMaterialesTemp() {
   }
   el.innerHTML = _movMaterialesTemp.map((l, i) => {
     const extra = [l.marca, l.color, l.tamano, l.presentacion].filter(Boolean).join(' · ');
-    const zaikoTag = l.zaikoActivoId
+    const zaikoTag = l.zaikoAmbiguo
+      ? `<span style="color:var(--orange,#f59e0b)">⚠️ Coincide con ${l.zaikoAmbiguo.length} ítems en Zaiko (${escHtml(l.zaikoAmbiguo.join(', '))}) — no se reflejará, corrígelo manualmente</span>`
+      : l.zaikoActivoId
       ? `<span style="color:var(--green)">✓ ${escHtml(l.zaikoActivoId)} en Zaiko</span>`
       : `<span style="color:var(--muted)">Sin coincidencia en Zaiko — no se reflejará</span>`;
     return `
@@ -749,12 +761,15 @@ async function guardarMovimiento() {
         marca: linea.marca, color: linea.color, tamano: linea.tamano,
         presentacion: linea.presentacion,
         zaiko_activo_id: linea.zaikoActivoId,
-        zaiko_sync_estado: 'PENDIENTE',
+        zaiko_sync_estado: linea.zaikoAmbiguo ? 'AMBIGUO' : 'PENDIENTE',
+        zaiko_sync_detalle: linea.zaikoAmbiguo
+          ? ('Coincide con varios activos en Zaiko: ' + linea.zaikoAmbiguo.join(', ') + ' — revisar y corregir manualmente')
+          : null,
       });
     }
     const { data: lineasInsertadas, error: eLineas } = await _sb.from('bib_movimiento_materiales')
       .insert(lineasParaInsertar)
-      .select('id,zaiko_activo_id,cantidad_entregada,nombre,unidad_medida,marca,color,tamano,presentacion');
+      .select('id,zaiko_activo_id,cantidad_entregada,nombre,unidad_medida,marca,color,tamano,presentacion,zaiko_sync_estado');
     if (eLineas) throw eLineas;
 
     // Espejo best-effort hacia Zaiko — una salida parcial por línea. Si el
@@ -766,6 +781,10 @@ async function guardarMovimiento() {
     // Nunca bloquea el guardado local ya hecho arriba.
     const _motivoMov = { prestamo: 'PRESTAMO MATERIAL', asignacion: 'ASIGNACION MATERIAL', consumo: 'CONSUMO MATERIAL' }[tipo] || 'SALIDA MATERIAL';
     for (const fila of lineasInsertadas) {
+      // Línea ambigua (varios activos con el mismo nombre en Zaiko): ya
+      // quedó marcada al insertar, no sincronizar — sobre todo NO crear un
+      // activo nuevo automáticamente, que sería un tercer duplicado más.
+      if (fila.zaiko_sync_estado === 'AMBIGUO') continue;
       try {
         let idActivo = fila.zaiko_activo_id;
         if (!idActivo) {
