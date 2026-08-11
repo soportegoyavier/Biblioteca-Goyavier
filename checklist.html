@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Biblioteca Goyavier — Checklist de simulacro</title>
+<style>
+:root {
+  --bg: #2a2a2e; --card: #333338; --card2: #3c3c42;
+  --border: #58585f; --border2: #6e6e78;
+  --text: #ffffff; --muted: #b0b0bb; --dim: #78787f;
+  --accent: #b39ddb; --accent2: #9575cd; --accent-bg: rgba(179,157,219,.13);
+  --green: #3dd68c; --blue: #4895ef; --red: #f85149; --amber: #f0883e;
+  --radius: 12px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text);
+  min-height: 100vh;
+}
+
+#header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(30,30,33,0.95); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+}
+#header-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; gap:12px; flex-wrap:wrap; }
+#header-title { font-size: 1.05rem; font-weight: 700; color: var(--accent); }
+#header-count { font-size: 0.85rem; color: var(--muted); }
+#progress-bar-wrap { height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
+#progress-bar { height: 100%; width: 0%; border-radius: 3px; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .4s cubic-bezier(.4,0,.2,1); }
+#reset-btn {
+  background: none; border: 1px solid var(--border2); color: var(--muted);
+  font-size: 0.75rem; padding: 4px 10px; border-radius: 20px; cursor: pointer;
+}
+#reset-btn:hover { color: var(--red); border-color: var(--red); }
+
+#main { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
+
+#hero {
+  text-align: center; padding: 32px 20px;
+  background: linear-gradient(135deg, var(--card) 0%, var(--card2) 100%);
+  border-radius: var(--radius); margin-bottom: 24px; border: 1px solid var(--border);
+}
+#hero h1 { font-size: 1.7rem; font-weight: 800; color: var(--accent); margin-bottom: 6px; }
+#hero p { color: var(--muted); font-size: 0.92rem; max-width: 640px; margin: 0 auto; }
+
+#summary {
+  background: var(--card2); border-radius: var(--radius);
+  padding: 18px 24px; margin-bottom: 24px; border: 1px solid var(--border);
+  display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; text-align: center;
+}
+.sum-num { font-size: 1.8rem; font-weight: 800; color: var(--accent); font-family: monospace; }
+.sum-lbl { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+
+.group-title {
+  font-size: 0.78rem; font-weight: 800; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .08em;
+  margin: 28px 4px 10px; padding-top: 4px;
+}
+.group-title:first-child { margin-top: 0; }
+
+.section { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; transition: border-color .3s; }
+.section.completed { border-color: rgba(61,214,140,.45); }
+.section-header { display:flex; align-items:center; gap:12px; padding:13px 16px; cursor:pointer; user-select:none; transition: background .15s; }
+.section-header:hover { background: rgba(255,255,255,.03); }
+.section-icon { font-size: 1.15rem; flex-shrink:0; }
+.section-title { font-size: 0.9rem; font-weight: 700; flex:1; }
+.section-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: rgba(255,255,255,.08); color: var(--muted); white-space: nowrap; }
+.section-badge.done { background: rgba(61,214,140,.18); color: var(--green); }
+.section-chevron { font-size: 0.7rem; color: var(--muted); transition: transform .25s; }
+.section.open .section-chevron { transform: rotate(180deg); }
+.section-body { display:none; padding: 4px 16px 12px; border-top: 1px solid var(--border); }
+.section.open .section-body { display:block; }
+
+.item { display:flex; align-items:flex-start; gap:10px; padding:7px 6px; border-radius:8px; cursor:pointer; transition: background .12s; }
+.item:hover { background: rgba(255,255,255,.04); }
+.item input[type=checkbox] { display:none; }
+.item-check { width:18px; height:18px; flex-shrink:0; border:2px solid var(--border2); border-radius:5px; margin-top:2px; display:flex; align-items:center; justify-content:center; font-size:10px; transition: all .15s; background: rgba(255,255,255,.03); }
+.item.checked .item-check { background: var(--green); border-color: var(--green); color:#0a0a0a; }
+.item-label { font-size: 0.84rem; line-height:1.4; color: var(--text); }
+.item.checked .item-label { color: var(--muted); text-decoration: line-through; }
+
+#footer { text-align:center; padding:24px; color: var(--dim); font-size:0.78rem; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="header-top">
+    <span id="header-title">📚 Biblioteca Goyavier — Checklist de simulacro</span>
+    <button id="reset-btn" onclick="resetAll()">↺ Reiniciar</button>
+    <span id="header-count">0 / 0 completados</span>
+  </div>
+  <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+</div>
+
+<div id="main">
+
+  <div id="hero">
+    <h1>Simulacro completo — Biblioteca + puente con Zaiko</h1>
+    <p>Cubre las 9 páginas de la app de Biblioteca, el módulo Biblioteca dentro de Zaiko, la conexión entre ambos sistemas, y los arreglos de sincronización de correo hechos hoy. El progreso se guarda solo en este navegador (localStorage) — se puede cerrar y retomar.</p>
+  </div>
+
+  <div id="summary">
+    <div><div class="sum-num" id="sum-done">0</div><div class="sum-lbl">Verificados</div></div>
+    <div><div class="sum-num" id="sum-pct">0%</div><div class="sum-lbl">Completado</div></div>
+    <div><div class="sum-num" id="sum-left">0</div><div class="sum-lbl">Pendientes</div></div>
+  </div>
+
+  <div id="sections-container"></div>
+
+  <div id="footer">Biblioteca Goyavier · Checklist creado con Claude Code</div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+//  DATOS DEL CHECKLIST — agrupados por sistema
+// ═══════════════════════════════════════════════
+const SECTIONS = [
+
+  { group: 'ARREGLOS DE HOY — verificar primero', icon:'🔧', title:'Sincronización de correo (confiabilidad)', items:[
+    'Con la app cerrada durante 10-15 min, llega un correo nuevo autorizado — al volver a abrir ya está capturado en Copias sin haber tocado "Sincronizar" (trigger automático cada 5 min)',
+    'En el editor de Apps Script, Triggers (ícono del reloj) muestra _sincronizarCorreosAutomatico corriendo cada 5 min, junto a verificarFechasMes, _procesarCorreosPendientesZaiko y verificarFinDeMesNoche',
+    'Dar clic varias veces seguidas en "Sincronizar" ya no muestra "Error de red con GAS" tan seguido — si aparece, reintenta solo (hasta 2 veces) antes de mostrar el error final',
+    'Reprocesar un correo ya existente (Auditoría → Diagnóstico) no deja el archivo adjunto huérfano — revisar que no llegue un nuevo correo de "inconsistencias Storage/BD" después de reprocesar',
+    'Un correo con un Google Doc/Sheet/Slide adjunto (no un .docx/.pdf subido) se sincroniza sin tumbar la ejecución — el adjunto queda como link a Drive, no como archivo descargado',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Dashboard', icon:'📊', title:'Dashboard', items:[
+    'Tarjetas de "Por imprimir", "Por entregar", "Entregados este mes", "Hojas este mes" muestran números correctos',
+    'Lista de solicitudes recientes (últimas 8) abre el detalle correcto al hacer clic',
+    'Bloque de deudores muestra los saldos pendientes reales y "ver todo en Caja" lleva a Caja → Deudas',
+    'Alertas de préstamos por vencer (materiales y libros) muestra vencidos/vencen hoy/vencen mañana con el color correcto, y clic lleva al detalle',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Gestión de Copias', icon:'🖨️', title:'Gestión de Copias', items:[
+    'Filtros por estado (pendiente/recibido/impreso/entregado/cancelado) y búsqueda por profesor/asunto/email funcionan',
+    'Botón Sincronizar trae correos nuevos autorizados y descarga sus adjuntos',
+    '"Marcar recibido" cambia el estado y aparece en Dashboard como "por imprimir"',
+    '"Registrar impresión": asignar archivos a uno o varios destinatarios (colaboradores), marcar tipo de impresión/hojas por archivo, confirmar — pasa a "impreso"',
+    'Selector de profesor (single-select con búsqueda) abre, filtra al escribir y selecciona bien',
+    'Detalle de una solicitud muestra todos los adjuntos y permite descargarlos todos de una vez',
+    '"Confirmar entrega" cambia el estado a "entregado" y registra quién recibió',
+    'Cancelar una solicitud pide motivo y la mueve a "cancelado"',
+    'Responder un correo desde el detalle envía la respuesta y queda registrada',
+    'Eliminar un correo (huérfano o de prueba) lo saca de la lista sin romper nada más',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Ventas / Personal', icon:'💵', title:'Ventas / Personal', items:[
+    'Un trabajo personal (no institucional) calcula el precio según cantidad de hojas/tipo de impresión correctamente',
+    'Agregar archivos a un trabajo personal y ajustar cantidad de copias recalcula el precio total',
+    'Reclasificar una solicitud de "personal" a "institucional" la mueve fuera de Ventas y a Gestión de Copias',
+    '"Nueva solicitud manual" (sin correo, alguien llega directo) se puede registrar completa',
+    'Editar un trabajo ya registrado (cambiar precio/cantidad) recalcula el saldo',
+    'Marcar como entregado / confirmar entrega funciona igual que en Gestión de Copias',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Caja', icon:'🧾', title:'Caja', items:[
+    'Pestaña "Día": totales de vendido/recibido/pendiente del día seleccionado son correctos, con la lista de trabajos y pagos de ese día',
+    'Pestaña "Mes": totales del mes y desglose por tipo de impresión son correctos',
+    'Pestaña "Deudas": lista solo personas con saldo pendiente real (> 0), agrupado por persona',
+    '"Abonar" desde Deudas registra un pago parcial, actualiza el saldo y envía comprobante',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Notificaciones', icon:'🔔', title:'Notificaciones', items:[
+    'Activar/desactivar correos automáticos por remitente se guarda y respeta al cambiar el estado de una solicitud suya',
+    'Agregar un tipo de copia nuevo (ej. "Color", "B&N") aparece disponible al registrar una impresión',
+    'Desactivar un tipo de copia deja de aparecer como opción nueva sin borrar el histórico ya registrado con ese tipo',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Colaboradores', icon:'👥', title:'Colaboradores', items:[
+    'Crear un colaborador nuevo con nombre/cargo/área y uno o más correos',
+    'Editar un colaborador existente (agregar/quitar correos) guarda bien',
+    'Activar/desactivar un colaborador lo saca del selector de destinatarios sin borrar su historial',
+    'Buscar por nombre/cargo/área/correo filtra correctamente, agrupado por área',
+    'El "picker" de destinatarios (usado en Copias/Ventas) permite elegir uno o varios colaboradores y agregar uno externo al vuelo',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Materiales y Préstamos', icon:'📦', title:'Materiales y Préstamos', items:[
+    'Pestaña Catálogo muestra el inventario real de Zaiko (Material institucional), paginado, sin descargar todo de una vez',
+    '"Agregar material(es)" desde el catálogo crea el ítem directo en Zaiko',
+    '"Nuevo movimiento": el campo de material abre la lista completa al hacer clic Y permite escribir para filtrar',
+    'Elegir tipo Préstamo pide fecha de devolución; Asignación permanente y Consumo no',
+    'Guardar un movimiento con un material que YA existe en Zaiko resta la cantidad allá',
+    'Guardar un movimiento con un material que NO existe en Zaiko lo crea automático allá con la cantidad entregada, y lo deja en 0/agotado',
+    '"Confirmar devolución" (préstamo/asignación) suma la cantidad completa de vuelta en Zaiko',
+    '"Confirmar retorno" (consumo, parcial) suma solo la cantidad devuelta en esa vuelta',
+    'Pestaña Libros: "Nuevo préstamo de libro" — el campo de título también abre lista completa al clic y permite escribir',
+    'Si el título ya tiene copias en Zaiko, se autoasigna la única copia disponible o deja elegir cuál si hay varias',
+    'Si el título no tiene copias en Zaiko, el préstamo se guarda igual en Biblioteca, marcado como no reflejado',
+    'Devolver un préstamo de libro libera la copia en Zaiko (vuelve a estar disponible para prestarse de nuevo)',
+    '"Cargar conteo físico en Zaiko" permite agregar uno o varios materiales nuevos con cantidad inicial',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Auditoría', icon:'🛡️', title:'Auditoría', items:[
+    'Pestaña Salud: ping a Supabase y a Storage responden OK, % de uso de Storage se ve razonable',
+    'Pestaña Alertas muestra problemas reales pendientes (si los hay)',
+    'Pestaña Logs: buscar/filtrar registros de auditoría funciona',
+    'Pestaña Diagnóstico → "Ejecutar reconciliación Storage/BD" corre sin errores y no reporta huérfanos nuevos después de las pruebas de arriba',
+    'Diagnóstico → reprocesar un correo puntual por su ID funciona sin tumbar la sesión',
+    'Pestaña Mantenimiento → "Archivar adjuntos antiguos" y "Limpiar ignorados" corren sin error (probar solo si es un momento seguro para hacerlo, no en medio de operación real)',
+  ]},
+
+  { group: 'BIBLIOTECA (la app) — Reportes', icon:'📈', title:'Reportes', items:[
+    'Resumen general del mes (solicitudes, ventas, materiales, libros) carga sin error',
+    'Excel General descarga y abre bien, con las hojas esperadas',
+    'Excel Institucionales descarga bien',
+    'Excel Ventas descarga bien y cuadra con lo visto en Caja',
+    'Excel Materiales descarga bien',
+    'Excel Auditoría descarga bien',
+  ]},
+
+  { group: 'ZAIKO — Módulo Biblioteca', icon:'🏫', title:'Catálogo, subcategorías y reclasificación', items:[
+    'Al entrar a Biblioteca (dentro de Zaiko) abre en la pestaña Catálogo',
+    'Catálogo: tabla paginada, búsqueda, "➕ Registrar ítem" y "📥 Importar masivo"',
+    'Configuración → Subcategorías (biblioteca): agregar una subcategoría nueva pide elegir familia Libro/Material',
+    'Registrar un ítem con esa subcategoría nueva muestra los campos correctos según su familia',
+    '"🔀 Cambiar subcategoría" avisa qué campos se pierden al cambiar de familia antes de confirmar',
+    'Un libro EN_PRESTAMO muestra el botón "↩ Devolver libro" en su detalle',
+    'Biblioteca ya NO aparece como opción en el Préstamo/Préstamo Múltiple genérico de Zaiko',
+  ]},
+
+  { group: 'ZAIKO — Módulo Biblioteca', icon:'🔄', title:'Movimientos de materiales', items:[
+    '"🤝 Nuevo movimiento": el desplegable de material abre lista completa al clic y permite escribir para filtrar',
+    'Un material con cantidad 0 (agotado) aparece gris, marcado "(AGOTADO)", y no se puede seleccionar',
+    'Guardar el movimiento resta la cantidad y aparece de inmediato en la tabla de Movimientos',
+    'La tabla de Movimientos solo muestra salidas/devoluciones parciales de materiales — ningún préstamo de libro se mezcla ahí',
+    '"↩ Devolver" en una fila de salida abre la devolución con ese material ya preseleccionado',
+    'Confirmar la devolución suma la cantidad y reactiva el material si estaba agotado',
+  ]},
+
+  { group: 'ZAIKO — Módulo Biblioteca', icon:'📖', title:'Préstamos de libro', items:[
+    '"📖 Nuevo préstamo de libro": el desplegable de libro también abre lista completa al clic y permite escribir',
+    'Guardar el préstamo aparece de inmediato en la tabla con badge "🔄 EN PRÉSTAMO"',
+    '"↩ Devolver" en un préstamo activo abre el flujo normal de devolución de Zaiko (acta, estado físico)',
+    'Un préstamo vencido muestra el badge "⏰ VENCIDO" con los días de retraso',
+    'Cambiar entre pestañas Catálogo/Movimientos/Préstamos y volver no mezcla datos entre ellas',
+  ]},
+
+  { group: 'PUENTE Biblioteca ↔ Zaiko', icon:'🌉', title:'Verificación cruzada entre los dos sistemas', items:[
+    'Un movimiento de material registrado en Biblioteca aparece reflejado en la pestaña Movimientos de Zaiko con la cantidad correcta',
+    'Un préstamo de libro registrado en Biblioteca aparece reflejado en la pestaña Préstamos de Zaiko',
+    'Devolver un libro desde Biblioteca libera la copia en Zaiko (vuelve a ACTIVO, ya no EN_PRESTAMO)',
+    'Hacer un préstamo/devolución/asignación de un activo de biblioteca directo en Zaiko (no en la app) genera un correo de aviso automático (vía la cola de correos pendientes de Zaiko)',
+    'Si Zaiko no responde momentáneamente, el movimiento/préstamo se guarda igual en Biblioteca marcado como no sincronizado, sin bloquear al usuario',
+  ]},
+
+];
+
+// ═══════════════════════════════════════════════
+//  PERSISTENCIA — localStorage por item (clave estable
+//  por texto de sección+item, no por índice, para que
+//  sobreviva a reordenar/agregar secciones más adelante)
+// ═══════════════════════════════════════════════
+const STORAGE_KEY = 'biblioteca_checklist_v1';
+let checkedState = {};
+try { checkedState = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e) { checkedState = {}; }
+
+function _itemKey(si, ii) {
+  return SECTIONS[si].title + '::' + SECTIONS[si].items[ii];
+}
+function _saveState() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(checkedState)); } catch(e) {}
+}
+function resetAll() {
+  if (!confirm('¿Reiniciar todo el checklist? Se borra el progreso guardado en este navegador.')) return;
+  checkedState = {};
+  _saveState();
+  location.reload();
+}
+
+// ═══════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════
+let totalItems = 0;
+let checkedItems = 0;
+
+function renderSections() {
+  const container = document.getElementById('sections-container');
+  let lastGroup = null;
+  SECTIONS.forEach((sec, si) => {
+    totalItems += sec.items.length;
+
+    if (sec.group !== lastGroup) {
+      lastGroup = sec.group;
+      const gt = document.createElement('div');
+      gt.className = 'group-title';
+      gt.textContent = sec.group;
+      container.appendChild(gt);
+    }
+
+    const div = document.createElement('div');
+    div.className = 'section open';
+    div.id = 'sec-' + si;
+    div.innerHTML = `
+      <div class="section-header" onclick="toggleSection(${si})">
+        <span class="section-icon">${sec.icon}</span>
+        <span class="section-title">${sec.title}</span>
+        <span class="section-badge" id="badge-${si}">0 / ${sec.items.length}</span>
+        <span class="section-chevron">▼</span>
+      </div>
+      <div class="section-body" id="body-${si}">
+        ${sec.items.map((item, ii) => `
+          <div class="item" id="item-${si}-${ii}" onclick="toggleItem(${si},${ii})">
+            <input type="checkbox" id="chk-${si}-${ii}">
+            <div class="item-check" id="check-${si}-${ii}"></div>
+            <div class="item-label">${item}</div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    container.appendChild(div);
+  });
+
+  // Restaurar estado guardado
+  SECTIONS.forEach((sec, si) => {
+    sec.items.forEach((_, ii) => {
+      if (checkedState[_itemKey(si, ii)]) {
+        const itemEl = document.getElementById(`item-${si}-${ii}`);
+        const checkEl = document.getElementById(`check-${si}-${ii}`);
+        itemEl.classList.add('checked');
+        checkEl.textContent = '✓';
+        checkedItems++;
+      }
+    });
+    updateSectionBadge(si);
+  });
+
+  document.getElementById('sum-left').textContent = totalItems - checkedItems;
+  updateProgress();
+}
+
+function toggleSection(si) {
+  document.getElementById('sec-' + si).classList.toggle('open');
+}
+
+function toggleItem(si, ii) {
+  const itemEl  = document.getElementById(`item-${si}-${ii}`);
+  const checkEl = document.getElementById(`check-${si}-${ii}`);
+  const key     = _itemKey(si, ii);
+  const wasChecked = itemEl.classList.contains('checked');
+
+  if (!wasChecked) {
+    itemEl.classList.add('checked');
+    checkEl.textContent = '✓';
+    checkedItems++;
+    checkedState[key] = true;
+  } else {
+    itemEl.classList.remove('checked');
+    checkEl.textContent = '';
+    checkedItems--;
+    delete checkedState[key];
+  }
+  _saveState();
+  updateProgress();
+  updateSectionBadge(si);
+}
+
+function updateSectionBadge(si) {
+  const sec = SECTIONS[si];
+  let done = 0;
+  sec.items.forEach((_, ii) => {
+    if (document.getElementById(`item-${si}-${ii}`).classList.contains('checked')) done++;
+  });
+  const badge = document.getElementById(`badge-${si}`);
+  badge.textContent = `${done} / ${sec.items.length}`;
+  const secEl = document.getElementById('sec-' + si);
+  if (done === sec.items.length) {
+    badge.classList.add('done');
+    secEl.classList.add('completed');
+  } else {
+    badge.classList.remove('done');
+    secEl.classList.remove('completed');
+  }
+}
+
+function updateProgress() {
+  const pct = totalItems ? Math.round((checkedItems / totalItems) * 100) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('header-count').textContent = `${checkedItems} / ${totalItems} completados`;
+  document.getElementById('sum-done').textContent = checkedItems;
+  document.getElementById('sum-pct').textContent = pct + '%';
+  document.getElementById('sum-left').textContent = totalItems - checkedItems;
+}
+
+renderSections();
+</script>
+</body>
+</html>
