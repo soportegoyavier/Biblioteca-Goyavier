@@ -838,7 +838,7 @@ async function guardarMovimiento() {
           marca: l.marca, color: l.color, tamano: l.tamano, presentacion: l.presentacion
         })),
         fechaLimite: tipo === 'prestamo' ? fechaLim : null,
-      }).catch(()=>{});
+      }, { reintentarTransporte: false }).catch(()=>{});
     }
 
     toast('Movimiento registrado', 'success');
@@ -979,7 +979,7 @@ async function confirmarDevolucionMovimiento() {
           libro: lib.libro_titulo,
           fechaDevolucion: fmtFecha(ahora),
           usuarioRecibio: usuario,
-        }).catch(()=>{});
+        }, { reintentarTransporte: false }).catch(()=>{});
       }
 
       toast('Devolución registrada', 'success');
@@ -1037,7 +1037,7 @@ async function confirmarDevolucionMovimiento() {
         materiales: _formatMaterialesResumen(lineas),
         fechaDevolucion: fmtFecha(ahora),
         usuarioRecibio: usuario,
-      }).catch(()=>{});
+      }, { reintentarTransporte: false }).catch(()=>{});
     }
 
     toast('Devolución registrada', 'success');
@@ -1537,7 +1537,7 @@ async function guardarPrestamoLibro() {
         editorial: editorial || null,
         fechaLimite: fechaLim || null,
         esInstitucional,
-      }).catch(()=>{});
+      }, { reintentarTransporte: false }).catch(()=>{});
     }
 
     toast('Préstamo registrado', 'success');
