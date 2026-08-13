@@ -492,6 +492,14 @@ function _auditar(modulo, accion, resultado, gravedad, detalle, duracionMs) {
   }
 }
 
+// Excepciones transitorias conocidas de Gmail (limite de tasa/cuota momentaneo
+// de Google que se resuelve solo en segundos, confirmado con el caso real del
+// 12/08/2026: "Gmail operation not allowed" desaparecio solo en la siguiente
+// corrida sin que nadie tocara nada). Reintentarlas evita que un hipo normal
+// de Gmail escale a 'critico' -- gravedad que en bib_vista_alertas (ver
+// 023_alertas.sql) siempre dispara la alerta diaria sin importar el umbral.
+var _GMAIL_ERROR_TRANSITORIO = /operation not allowed|invoked too many times|rate limit|quota/i;
+
 function sincronizarCorreos(params) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
@@ -499,7 +507,7 @@ function sincronizarCorreos(params) {
   }
   var t0 = Date.now();
   try {
-    var res = _sincronizarCorreosImpl(params);
+    var res = _sincronizarCorreosConReintento(params);
     var dur = Date.now() - t0;
     if (res && res.error) {
       _auditar('sincronizacion', 'sincronizar', 'error', 'error', res.error, dur);
@@ -510,10 +518,32 @@ function sincronizarCorreos(params) {
     }
     return res;
   } catch(e) {
-    _auditar('sincronizacion', 'sincronizar', 'error', 'critico', e.toString(), Date.now() - t0);
+    // Si persiste tras los reintentos y sigue siendo del tipo transitorio
+    // conocido, se registra como 'advertencia' (visible en Logs, no dispara
+    // por si sola el 'critico' automatico) -- cualquier otra excepcion no
+    // reconocida sigue subiendo como 'critico' de inmediato, sin retrasar la
+    // senal de un bug real.
+    var gravedad = _GMAIL_ERROR_TRANSITORIO.test(e.toString()) ? 'advertencia' : 'critico';
+    _auditar('sincronizacion', 'sincronizar', 'error', gravedad, e.toString() + ' (persistio tras reintentos)', Date.now() - t0);
     throw e;
   } finally {
     lock.releaseLock();
+  }
+}
+
+// Hasta 2 reintentos (3 intentos en total) solo para el error transitorio
+// conocido -- cualquier otra excepcion sube de inmediato sin retrasarla.
+// _sincronizarCorreosImpl es seguro de reintentar completo: es resumible por
+// checkpoint (bib_sync_estado.ultimo_message_date) y sus inserts son dedup
+// por gmail_message_id, igual que ya se apoya en eso reprocesarCorreoManual.
+function _sincronizarCorreosConReintento(params) {
+  for (var intento = 0; ; intento++) {
+    try {
+      return _sincronizarCorreosImpl(params);
+    } catch(e) {
+      if (intento >= 2 || !_GMAIL_ERROR_TRANSITORIO.test(e.toString())) throw e;
+      Utilities.sleep(1500 * (intento + 1));
+    }
   }
 }
 
