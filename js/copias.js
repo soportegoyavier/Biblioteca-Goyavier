@@ -120,7 +120,7 @@ async function marcarRecibido(id, btn) {
             const { data: numP } = await _sb.rpc('get_num_solicitud_para_email', { p_email: dest.email, p_solicitud_id: id });
             return gasCall('enviarCorreo', { tipo:'recibido', destinatario: dest.email,
               numPersonal: numP || 1, idSolicitud: sol.id_solicitud,
-              asunto: sol.asunto, profesor: sol.profesor });
+              asunto: sol.asunto, profesor: sol.profesor }, { reintentarTransporte: false });
           })).catch(()=>{});
         }
         toast(`Recibido · ID: ${idRes}`, 'success');
@@ -395,7 +395,7 @@ async function confirmarImpreso() {
       return gasCall('enviarCorreo', { tipo:'impreso', destinatario: d.email,
         numPersonal: numP||1, idSolicitud: sol.id_solicitud,
         asunto: sol.asunto, profesor: d.nombre,
-        materia: sol.materia, numHojas: r.total_hojas });
+        materia: sol.materia, numHojas: r.total_hojas }, { reintentarTransporte: false });
     })).catch(()=>{});
 
     toast('Impresión registrada. Correo enviado.', 'success');
@@ -539,7 +539,7 @@ async function confirmarEntrega() {
         asunto: sol.asunto, profesor: trab.profesor,
         materia: sol.materia, archivos: trab.archivos,
         nombreRecibe: recibe, fechaEntrega: fechaFmt
-      }).catch(()=>{});
+      }, { reintentarTransporte: false }).catch(()=>{});
     }
     toast('Entrega registrada' + (trab.destinatario_email ? '. Correo enviado.' : ' (destinatario sin correo registrado).'), 'success');
     cerrarModal('modal-entrega');
@@ -792,18 +792,18 @@ function editarProfesorTrabajo(trabajoId, solicitudId) {
         avisos.push(gasCall('enviarCorreo', {
           tipo: 'correccion_registro', destinatario: trabajoActual.destinatario_email,
           idSolicitud: sol?.id_solicitud, asuntoOriginal: sol?.asunto,
-        }));
+        }, { reintentarTransporte: false }));
       }
       if (elegido.email) {
         avisos.push(gasCall('enviarCorreo', {
           tipo: 'recibido', destinatario: elegido.email,
           idSolicitud: sol?.id_solicitud, asunto: sol?.asunto, profesor: elegido.nombre,
-        }));
+        }, { reintentarTransporte: false }));
         avisos.push(gasCall('enviarCorreo', {
           tipo: 'impreso', destinatario: elegido.email,
           idSolicitud: sol?.id_solicitud, asunto: sol?.asunto, profesor: elegido.nombre,
           numHojas: trabajoActual.total_hojas || null,
-        }));
+        }, { reintentarTransporte: false }));
       }
       await Promise.allSettled(avisos);
 

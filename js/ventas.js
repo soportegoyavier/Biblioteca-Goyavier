@@ -621,7 +621,7 @@ async function _enviarComprobantePago(trabajoId, monto) {
     pagado: trab.valor_pagado,
     saldo: saldo,
     fecha: new Date().toLocaleString('es-CO', { dateStyle:'short', timeStyle:'short' })
-  }).catch(()=>{});
+  }, { reintentarTransporte: false }).catch(()=>{});
   return true;
 }
 
@@ -837,7 +837,7 @@ async function marcarEntregadoVentas() {
         fechaEntrega: new Date(ahora).toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' }),
         esPersonal: true,
         precioTotal: total, pagado: pagado, saldo: Math.max(0, total - pagado)
-      }).catch(() => {});
+      }, { reintentarTransporte: false }).catch(() => {});
     }
 
     const seEnvio = sendEmail && sol.remitente_email && sol.tipo_solicitante !== 'estudiante';
