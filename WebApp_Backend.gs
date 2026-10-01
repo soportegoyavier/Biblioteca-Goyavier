@@ -2301,6 +2301,26 @@ function _exportarMesImpl(ano, mes) {
   var ventas = sbGet(_url, _key,
     'bib_solicitudes?' + qFecha + '&tipo_remitente=eq.personal&select=' + selectVentas + '&order=fecha_recepcion.asc');
 
+  // Dinero: misma regla que Caja → Mes (js/caja.js): ventas = trabajos
+  // personales REGISTRADOS en el mes (aunque el correo haya llegado antes) y
+  // dinero recibido = abonos (bib_pagos) hechos en el mes. Antes el reporte
+  // sumaba los trabajos de las solicitudes RECIBIDAS en el mes, y por eso no
+  // cuadraba con Caja (Sept 2026: 47.600 en el reporte vs 70.200 en Caja).
+  var cajaTrabs = sbGet(_url, _key,
+    'bib_trabajos_personal?created_at=gte.' + ini + '&created_at=lt.' + fin +
+    '&select=id,nombre,precio_total,valor_pagado,created_at,bib_solicitudes(remitente_email,remitente_nombre,asunto,estado)' +
+    '&order=created_at.asc');
+  var cajaPagos = sbGet(_url, _key,
+    'bib_pagos?created_at=gte.' + ini + '&created_at=lt.' + fin + '&select=monto');
+  if (!Array.isArray(cajaTrabs)) throw new Error('Error trabajos personales: ' + JSON.stringify(cajaTrabs));
+  if (!Array.isArray(cajaPagos)) throw new Error('Error pagos: ' + JSON.stringify(cajaPagos));
+  var caja = {
+    trabajos:  cajaTrabs,
+    vendido:   cajaTrabs.reduce(function(a,t){ return a + (t.precio_total || 0); }, 0),
+    recibido:  cajaPagos.reduce(function(a,p){ return a + (p.monto || 0); }, 0),
+    pendiente: cajaTrabs.reduce(function(a,t){ return a + Math.max(0, (t.precio_total || 0) - (t.valor_pagado || 0)); }, 0)
+  };
+
   var qFechaMov = 'created_at=gte.' + ini + '&created_at=lt.' + fin;
   var selectMov = 'id,id_movimiento,tipo,colaborador_nombre,area,fecha_limite_devolucion,fecha_devolucion_real';
   var movs = sbGet(_url, _key, 'bib_movimientos?' + qFechaMov + '&select=' + selectMov + '&order=created_at.asc');
@@ -2333,10 +2353,10 @@ function _exportarMesImpl(ano, mes) {
   // Crear Google Spreadsheet
   var nombre = 'Biblioteca_' + nom + '_' + ano;
   var ss = SpreadsheetApp.create(nombre);
-  _crearHojaResumen(ss, sols, trabs, ventas, movs, libros, nom, ano);
+  _crearHojaResumen(ss, sols, trabs, ventas, caja, movs, libros, nom, ano);
   _crearHojaSolicitudes(ss, sols, nom, ano);
   _crearHojaTrabajosImp(ss, sols, trabs, nom, ano);
-  _crearHojaVentas(ss, ventas, nom, ano);
+  _crearHojaVentas(ss, caja, nom, ano);
   _crearHojaMovimientos(ss, movs, lineasMov, nom, ano);
   _crearHojaLibros(ss, libros, nom, ano);
   // Borrar hoja por defecto vacía
@@ -2367,7 +2387,7 @@ function _exportarMesImpl(ano, mes) {
   // Enviar email
   var emailDest = _cfg('REPORTE_EMAIL') || Session.getActiveUser().getEmail();
   var emails    = emailDest.split(',').map(function(e){return e.trim();}).filter(Boolean);
-  var htmlBody  = _htmlEmailReporte(nom, ano, sols, ventas, movs, libros, 'https://drive.google.com/drive/folders/' + carpeta.getId());
+  var htmlBody  = _htmlEmailReporte(nom, ano, sols, caja, movs, libros, 'https://drive.google.com/drive/folders/' + carpeta.getId());
   emails.forEach(function(email) {
     GmailApp.sendEmail(email,
       'Reporte Biblioteca ' + nom + ' ' + ano + ' — guardado automaticamente',
@@ -2380,7 +2400,7 @@ function _exportarMesImpl(ano, mes) {
 }
 
 // ── Hoja RESUMEN (KPIs generales + ventas) ────────────────────
-function _crearHojaResumen(ss, sols, trabs, ventas, movs, libros, nom, ano) {
+function _crearHojaResumen(ss, sols, trabs, ventas, caja, movs, libros, nom, ano) {
   var sh = ss.insertSheet('Resumen');
   sh.setColumnWidth(1,220); sh.setColumnWidth(2,110); sh.setColumnWidth(3,110);
   sh.setColumnWidth(4,110); sh.setColumnWidth(5,110);
@@ -2447,18 +2467,12 @@ function _crearHojaResumen(ss, sols, trabs, ventas, movs, libros, nom, ano) {
   fKpiVal(r++, [hTot,hBN,hCo,hUn,hDo], ['#DBEAFE','#F1F5F9','#F1F5F9','#F1F5F9','#F1F5F9']);
   sh.setRowHeight(r++, 8);
 
-  // Ventas resumen
-  var totCob=0,totRec=0;
-  ventas.forEach(function(v){
-    var tt=v.bib_trabajos_personal||[];
-    totCob+=tt.reduce(function(a,t){return a+(t.precio_total||0);},0);
-    totRec+=tt.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
-  });
+  // Ventas resumen — mismas cifras que Caja → Mes
   function pesos(n){return '$ '+Math.round(n||0).toLocaleString();}
-  fHdr(r++, 'VENTAS DEL MES', '#1a5632', '#FFFFFF');
-  fKpiLbl(r++, ['Solicitudes','Total Cobrado','Total Recibido','Saldo'], '#E6F4EA');
-  fKpiVal(r++, [ventas.length, pesos(totCob), pesos(totRec), pesos(totCob-totRec)],
-    ['#DBEAFE','#DCFCE7','#DCFCE7',(totCob-totRec)>0?'#FEE2E2':'#DCFCE7']);
+  fHdr(r++, 'VENTAS DEL MES (igual que Caja → Mes)', '#1a5632', '#FFFFFF');
+  fKpiLbl(r++, ['Total ventas','Dinero recibido','Pendiente','Trabajos','Solicitudes'], '#E6F4EA');
+  fKpiVal(r++, [pesos(caja.vendido), pesos(caja.recibido), pesos(caja.pendiente), caja.trabajos.length, ventas.length],
+    ['#DCFCE7','#DCFCE7',caja.pendiente>0?'#FEE2E2':'#DCFCE7','#DBEAFE','#F1F5F9']);
   sh.setRowHeight(r++, 8);
 
   // Top solicitantes
@@ -2592,72 +2606,52 @@ function _crearHojaTrabajosImp(ss, sols, trabs, nom, ano) {
   }
 }
 
-// ── Hoja VENTAS ───────────────────────────────────────────────
-function _crearHojaVentas(ss, ventas, nom, ano) {
+// ── Hoja VENTAS (trabajos personales registrados en el mes) ──
+// Mismas cifras que Caja → Mes: Total ventas = suma de los trabajos del mes,
+// Dinero recibido = abonos hechos en el mes (pueden ser de trabajos de meses
+// anteriores, por eso no siempre es igual a la columna Pagado).
+function _crearHojaVentas(ss, caja, nom, ano) {
   var sh = ss.insertSheet('Ventas');
-  [30,100,220,250,110,80,120,120,120].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
-  var BVST={pagado:'#DCFCE7',deuda:'#FEE2E2',sin:'#F1F5F9',cancelado:'#FEE2E2'};
-  var FVST={pagado:'#166534',deuda:'#991B1B',sin:'#475569',cancelado:'#991B1B'};
+  [30,110,220,250,200,110,110,110].forEach(function(w,i){sh.setColumnWidth(i+1,w);});
   var tz=Session.getScriptTimeZone();
   function pesos(n){return '$ '+Math.round(n||0).toLocaleString();}
 
-  var totCob=0,totRec=0,cPag=0,cDeu=0,cSin=0,cCan=0;
-  ventas.forEach(function(r){
-    if(r.estado==='cancelado'){cCan++;return;}
-    var tt=r.bib_trabajos_personal||[];
-    var co=tt.reduce(function(a,t){return a+(t.precio_total||0);},0);
-    var re=tt.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
-    totCob+=co; totRec+=re;
-    if(!tt.length)cSin++; else if(co-re>0.005)cDeu++; else cPag++;
-  });
-
-  sh.getRange(1,1,1,9).merge().setValue('VENTAS — ' + nom + ' ' + ano)
+  sh.getRange(1,1,1,8).merge().setValue('VENTAS — ' + nom + ' ' + ano)
     .setBackground('#1a5632').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(13).setVerticalAlignment('middle');
   sh.setRowHeight(1,28);
-  sh.getRange(2,1,1,4).setValues([['Total Cobrado','Total Recibido','Saldo Pendiente','Solicitudes']])
+  sh.getRange(2,1,1,4).setValues([['Total ventas','Dinero recibido','Pendiente','Trabajos']])
     .setBackground('#166534').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
   sh.setRowHeight(2,18);
-  [pesos(totCob),pesos(totRec),pesos(totCob-totRec),ventas.length].forEach(function(v,i){
-    sh.getRange(3,i+1).setValue(v).setBackground(i===2&&(totCob-totRec)>0?'#FEE2E2':'#DCFCE7')
+  [pesos(caja.vendido),pesos(caja.recibido),pesos(caja.pendiente),caja.trabajos.length].forEach(function(v,i){
+    sh.getRange(3,i+1).setValue(v).setBackground(i===2&&caja.pendiente>0?'#FEE2E2':'#DCFCE7')
       .setFontWeight('bold').setFontSize(12).setHorizontalAlignment('center');
   });
   sh.setRowHeight(3,32);
-  sh.getRange(4,1,1,4).setValues([['Pagadas','Con deuda','Sin registrar','Canceladas']])
-    .setBackground('#166534').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
-  sh.setRowHeight(4,18);
-  [cPag,cDeu,cSin,cCan].forEach(function(v,i){
-    sh.getRange(5,i+1).setValue(v).setBackground(['#DCFCE7','#FEE2E2','#F1F5F9','#F1F5F9'][i])
-      .setFontWeight('bold').setFontSize(14).setHorizontalAlignment('center');
-  });
-  sh.setRowHeight(5,32);
-  sh.setRowHeight(6,10);
-  sh.getRange(7,1,1,9).setValues([['N','Fecha','Remitente','Asunto','Estado Pago','Trabajos','Cobrado','Recibido','Saldo']])
+  sh.getRange(4,1,1,8).merge().setValue('Igual que Caja → Mes: ventas = trabajos registrados en el mes; dinero recibido = abonos hechos en el mes.')
+    .setFontSize(9).setFontColor('#475569');
+  sh.setRowHeight(5,10);
+  sh.getRange(6,1,1,8).setValues([['N','Fecha','Remitente','Asunto','Trabajo','Valor','Pagado','Saldo']])
     .setBackground('#14532D').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(9).setHorizontalAlignment('center');
-  sh.setRowHeight(7,20); sh.setFrozenRows(7);
+  sh.setRowHeight(6,20); sh.setFrozenRows(6);
 
-  var rows=[];
-  ventas.forEach(function(s,i){
-    var tt=s.bib_trabajos_personal||[];
-    var co=tt.reduce(function(a,t){return a+(t.precio_total||0);},0);
-    var re=tt.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
-    var sd=co-re;
-    var ep,estKey;
-    if(s.estado==='cancelado'){ep='Cancelada';estKey='cancelado';}
-    else if(!tt.length){ep='Sin registrar';estKey='sin';}
-    else if(sd>0.005){ep='Con deuda';estKey='deuda';}
-    else{ep='Pagado';estKey='pagado';}
-    var f=s.fecha_recepcion?Utilities.formatDate(new Date(s.fecha_recepcion),tz,'dd/MM/yyyy'):'';
-    rows.push({v:[i+1,f,s.remitente_email||'',s.asunto||'',ep,tt.length,pesos(co),pesos(re),sd>0.005?pesos(sd):'—'],k:estKey});
+  var rows = caja.trabajos.map(function(t,i){
+    var sol = t.bib_solicitudes || {};
+    var sd = (t.precio_total||0) - (t.valor_pagado||0);
+    var f = t.created_at ? Utilities.formatDate(new Date(t.created_at),tz,'dd/MM/yyyy') : '';
+    return [i+1, f, sol.remitente_email||sol.remitente_nombre||'', sol.asunto||'', t.nombre||'',
+      pesos(t.precio_total), pesos(t.valor_pagado), sd>0.005?pesos(sd):'—'];
   });
   if (rows.length) {
-    sh.getRange(8,1,rows.length,9).setValues(rows.map(function(r){return r.v;}));
-    rows.forEach(function(r,i){
-      sh.getRange(8+i,1,1,9).setBackground(BVST[r.k]||(i%2===0?'#FFFFFF':'#F0FDF4')).setFontColor(FVST[r.k]||'#1e293b');
-      sh.setRowHeight(8+i,18);
+    sh.getRange(7,1,rows.length,8).setValues(rows);
+    caja.trabajos.forEach(function(t,i){
+      var sd=(t.precio_total||0)-(t.valor_pagado||0);
+      sh.getRange(7+i,1,1,8).setBackground(sd>0.005?'#FEE2E2':(i%2===0?'#FFFFFF':'#F0FDF4'));
+      sh.setRowHeight(7+i,18);
     });
-    var tr=8+rows.length;
-    sh.getRange(tr,1,1,9).setValues([['TOTAL','','','','',ventas.length,pesos(totCob),pesos(totRec),pesos(totCob-totRec)]]);
-    sh.getRange(tr,1,1,9).setBackground('#BBF7D0').setFontWeight('bold').setFontColor('#14532D');
+    var tr=7+rows.length;
+    var totPag=caja.trabajos.reduce(function(a,t){return a+(t.valor_pagado||0);},0);
+    sh.getRange(tr,1,1,8).setValues([['TOTAL','','','','',pesos(caja.vendido),pesos(totPag),pesos(caja.pendiente)]]);
+    sh.getRange(tr,1,1,8).setBackground('#BBF7D0').setFontWeight('bold').setFontColor('#14532D');
     sh.setRowHeight(tr,24);
   }
 }
@@ -2909,11 +2903,11 @@ function _alertaFinDeMes(dias, fecha) {
 }
 
 // ── Email con el reporte adjunto ─────────────────────────────
-function _htmlEmailReporte(nom, ano, sols, ventas, movs, libros, driveUrl) {
+function _htmlEmailReporte(nom, ano, sols, caja, movs, libros, driveUrl) {
   var total    = sols.length;
   var entregadas = sols.filter(function(s){return s.estado==='entregado';}).length;
   var hTot     = sols.reduce(function(a,s){return a+(s.bib_documentos||[]).reduce(function(b,d){return b+(d.num_hojas||0);},0);},0);
-  var totCob   = ventas.reduce(function(a,r){return a+(r.bib_trabajos_personal||[]).reduce(function(b,t){return b+(t.precio_total||0);},0);},0);
+  var totCob   = caja.vendido;
   function pesos(n){return '$ '+Math.round(n||0).toLocaleString();}
   return '<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto">'
     + '<div style="background:#1e3a5f;color:#fff;padding:20px;border-radius:8px 8px 0 0">'
