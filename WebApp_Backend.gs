@@ -1772,11 +1772,14 @@ function verificarFechasMes() {
 // mensual, separado de verificarFechasMes para que pueda tener su
 // propio horario (de noche, ya con la jornada terminada) sin mover
 // de horario el resto de tareas diarias.
+// Corre el dia 1 y genera el mes ANTERIOR ya cerrado: asi el reporte
+// incluye todo el ultimo dia (antes corria el ultimo dia a las 7pm y
+// dejaba fuera lo que llegaba despues de esa hora).
 function verificarFinDeMesNoche() {
-  var hoy       = new Date();
-  var diasEnMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
-  if (hoy.getDate() === diasEnMes) {
-    try { _exportarMes(hoy.getFullYear(), hoy.getMonth()); }
+  var hoy = new Date();
+  if (hoy.getDate() === 1) {
+    var ant = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+    try { _exportarMes(ant.getFullYear(), ant.getMonth()); }
     catch(e) { _notificarError('exportarMes', e.toString()); }
   }
 }
@@ -2244,11 +2247,17 @@ function limpiarNombresRecuperados() {
     renombrados + ' renombrado(s), ' + borrados + ' duplicado(s) borrado(s), ' + sinResolver + ' sin resolver');
 }
 
-// ── Ejecutar manualmente para probar sin esperar al fin de mes ─
+// ── Ejecutar manualmente desde el editor: genera el MES ANTERIOR ─
+// (el mes en curso todavia no ha terminado). Para otro mes, usar
+// Centro de salud → Mantenimiento → "Generar reporte" en la app.
 function exportarMesManual() {
   var hoy = new Date();
-  _exportarMes(hoy.getFullYear(), hoy.getMonth());
+  var ant = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+  _exportarMes(ant.getFullYear(), ant.getMonth());
 }
+
+// ── Atajo para el editor: reporte de Septiembre 2026 ──────────
+function exportarSeptiembre2026() { _exportarMes(2026, 8); }
 
 // ── Motor principal de exportación ───────────────────────────
 function _exportarMes(ano, mes) {
@@ -2272,17 +2281,16 @@ function _exportarMesImpl(ano, mes) {
   var fin = Utilities.formatDate(new Date(ano, mes + 1, 1), 'UTC', "yyyy-MM-dd'T'HH:mm:ss'Z'");
   Logger.log('Exportando ' + nom + ' ' + ano + ' (' + ini + ' → ' + fin + ')');
 
-  // Consultas Supabase — cada tipo trae lo del mes MAS lo que haya quedado
-  // sin gestionar de meses anteriores (arrastre), para que nada pendiente
-  // desaparezca de los reportes solo porque cambio el mes.
+  // Consultas Supabase — SOLO lo creado dentro del mes [ini, fin).
+  // Antes se sumaba "arrastre" (todo lo pendiente de meses anteriores) y el
+  // reporte de un mes terminaba mezclando cientos de solicitudes de otros
+  // meses (p. ej. el de Agosto 2026 traia 203 de junio). Lo pendiente de
+  // meses anteriores se gestiona en la app, no en el reporte del mes.
   var qFecha = 'fecha_recepcion=gte.' + ini + '&fecha_recepcion=lt.' + fin;
   var selectSol = 'id,id_solicitud,fecha_recepcion,remitente_email,asunto,estado,destinatarios,' +
     'profesor,nombre_recibe,notif_impreso_en,fecha_entrega,' +
     'bib_documentos(num_hojas,tipo_impresion,forma_impresion)';
   var sols = sbGet(_url, _key, 'bib_solicitudes?' + qFecha + '&select=' + selectSol + '&order=fecha_recepcion.asc');
-  var solsPend = sbGet(_url, _key,
-    'bib_solicitudes?fecha_recepcion=lt.' + ini + '&estado=not.in.(entregado,cancelado)' +
-    '&select=' + selectSol + '&order=fecha_recepcion.asc');
 
   var trabs = sbGet(_url, _key,
     'bib_trabajos_impresion?created_at=gte.' + ini + '&created_at=lt.' + fin +
@@ -2292,57 +2300,35 @@ function _exportarMesImpl(ano, mes) {
     'bib_trabajos_personal(precio_total,valor_pagado)';
   var ventas = sbGet(_url, _key,
     'bib_solicitudes?' + qFecha + '&tipo_remitente=eq.personal&select=' + selectVentas + '&order=fecha_recepcion.asc');
-  var ventasPend = sbGet(_url, _key,
-    'bib_solicitudes?fecha_recepcion=lt.' + ini + '&tipo_remitente=eq.personal&estado=not.in.(entregado,cancelado)' +
-    '&select=' + selectVentas + '&order=fecha_recepcion.asc');
 
   var qFechaMov = 'created_at=gte.' + ini + '&created_at=lt.' + fin;
   var selectMov = 'id,id_movimiento,tipo,colaborador_nombre,area,fecha_limite_devolucion,fecha_devolucion_real';
   var movs = sbGet(_url, _key, 'bib_movimientos?' + qFechaMov + '&select=' + selectMov + '&order=created_at.asc');
-  var movsPend = sbGet(_url, _key,
-    'bib_movimientos?created_at=lt.' + ini + '&tipo=neq.consumo&fecha_devolucion_real=is.null' +
-    '&select=' + selectMov + '&order=created_at.asc');
-  if (!Array.isArray(movsPend)) movsPend = [];
 
   var lineasMov = sbGet(_url, _key,
     'bib_movimiento_materiales?select=movimiento_id,nombre,cantidad_entregada,unidad_medida,cantidad_devuelta,bib_movimientos!inner(created_at)' +
     '&bib_movimientos.created_at=gte.' + ini + '&bib_movimientos.created_at=lt.' + fin);
-  var lineasMovPend = [];
-  if (movsPend.length) {
-    var idsPend = movsPend.map(function(m){ return m.id; }).join(',');
-    lineasMovPend = sbGet(_url, _key,
-      'bib_movimiento_materiales?movimiento_id=in.(' + idsPend + ')' +
-      '&select=movimiento_id,nombre,cantidad_entregada,unidad_medida,cantidad_devuelta');
-  }
 
   var selectLib = 'id,id_prestamo,libro_titulo,tipo_prestatario,prestatario_nombre,es_institucional,fecha_limite_devolucion,fecha_devolucion_real';
   var libros = sbGet(_url, _key,
     'bib_prestamos_libros?fecha_prestamo=gte.' + ini + '&fecha_prestamo=lt.' + fin + '&select=' + selectLib + '&order=fecha_prestamo.asc');
-  var librosPend = sbGet(_url, _key,
-    'bib_prestamos_libros?fecha_prestamo=lt.' + ini + '&fecha_devolucion_real=is.null' +
-    '&select=' + selectLib + '&order=fecha_prestamo.asc');
 
-  if (!Array.isArray(sols))         throw new Error('Error solicitudes: ' + JSON.stringify(sols));
-  if (!Array.isArray(trabs))        trabs         = [];
-  if (!Array.isArray(ventas))       ventas        = [];
-  if (!Array.isArray(movs))         movs          = [];
-  if (!Array.isArray(lineasMov))    lineasMov     = [];
-  if (!Array.isArray(libros))       libros        = [];
-  if (!Array.isArray(solsPend))     solsPend      = [];
-  if (!Array.isArray(ventasPend))   ventasPend    = [];
-  if (!Array.isArray(lineasMovPend)) lineasMovPend = [];
-  if (!Array.isArray(librosPend))   librosPend    = [];
+  if (!Array.isArray(sols))      throw new Error('Error solicitudes: ' + JSON.stringify(sols));
+  if (!Array.isArray(trabs))     trabs     = [];
+  if (!Array.isArray(ventas))    ventas    = [];
+  if (!Array.isArray(movs))      movs      = [];
+  if (!Array.isArray(lineasMov)) lineasMov = [];
+  if (!Array.isArray(libros))    libros    = [];
 
-  sols      = solsPend.concat(sols);
-  ventas    = ventasPend.concat(ventas);
-  movs      = movsPend.concat(movs);
-  lineasMov = lineasMovPend.concat(lineasMov);
-  libros    = librosPend.concat(libros);
+  // Red de seguridad: descarta cualquier fila cuya fecha quede fuera del mes,
+  // por si una consulta futura vuelve a traer de mas.
+  var tIni = new Date(ini).getTime(), tFin = new Date(fin).getTime();
+  function _enMes(f) { if (!f) return false; var t = new Date(f).getTime(); return t >= tIni && t < tFin; }
+  sols   = sols.filter(function(s) { return _enMes(s.fecha_recepcion); });
+  ventas = ventas.filter(function(v) { return _enMes(v.fecha_recepcion); });
 
-  Logger.log('Datos: ' + sols.length + ' sols (+' + solsPend.length + ' arrastradas), ' + trabs.length + ' trabs, ' +
-    ventas.length + ' ventas (+' + ventasPend.length + ' arrastradas), ' +
-    movs.length + ' movs (+' + movsPend.length + ' arrastrados), ' +
-    libros.length + ' libros (+' + librosPend.length + ' arrastrados)');
+  Logger.log('Datos: ' + sols.length + ' sols, ' + trabs.length + ' trabs, ' + ventas.length + ' ventas, ' +
+    movs.length + ' movs, ' + libros.length + ' libros');
 
   // Crear Google Spreadsheet
   var nombre = 'Biblioteca_' + nom + '_' + ano;
