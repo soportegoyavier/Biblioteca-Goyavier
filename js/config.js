@@ -1,6 +1,6 @@
 // ── CONFIG ──────────────────────────────────────────────────
 const SUPABASE_URL      = 'https://xmondkilgkesaqaspmfq.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhtb25ka2lsZ2tlc2FxYXNwbWZxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2NjU2NjIsImV4cCI6MjA5NzI0MTY2Mn0.-W9hrn4Ts_CbceZq4HEVoqdTjt4oBPqFtXsmvfRZEwA';
+const SUPABASE_ANON_KEY = 'sb_publishable_dvzqp1_DjAjSbQIEufGn1Q_kFtWKz_t';
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbywOPXKEYBeM7KaAUrdPaExW0EWAHH3tLVg0gfhm2--iavwWuuIGiEOkTh7R5EYqyLd/exec';
 const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
