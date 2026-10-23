@@ -110,7 +110,10 @@ async function sincronizar() {
   let totalAgregados = 0;
   let offset = 0;
   let vuelta = 0;
-  const MAX_VUELTAS = 15;
+  // 20 vueltas de 8 hilos (160) cubren lo mismo que antes 15 de 10 (150):
+  // el backend ahora avanza de a 8 (los hilos que de verdad revisa) y ya no
+  // se salta 2 de cada pagina.
+  const MAX_VUELTAS = 20;
 
   try {
     while (vuelta < MAX_VUELTAS) {

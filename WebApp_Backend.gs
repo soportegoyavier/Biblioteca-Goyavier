@@ -114,6 +114,7 @@ function despachar(p) {
   }
   switch (p.accion) {
     case "sincronizarCorreos":     return sincronizarCorreos(p);
+    case "diagnosticarSincronizacion": return diagnosticarSincronizacion(parseInt(p.horas) || 24);
     case "enviarCorreo":           return _enviarCorreoConReintento(p);
     case "estadoAutomatizacion":   return _estadoAutomatizacion();
     case "ejecutarReconciliacion": return _ejecutarReconciliacionManual();
@@ -506,15 +507,23 @@ function sincronizarCorreos(params) {
     return { ok: false, locked: true, error: "Ya hay una sincronización en curso. Intenta de nuevo en unos segundos." };
   }
   var t0 = Date.now();
+  // GmailApp lee el buzon de la cuenta con la que CORRE el script (el
+  // disparador, el boton de la app y el editor pueden correr con cuentas
+  // distintas). Se anota en la auditoria para poder ver desde la base de datos
+  // de que buzon salio cada sincronizacion -- visto el 01/10/2026: un diagnostico
+  // corrido desde el editor no veia ninguna de las solicitudes de impresion
+  // porque corria con otra cuenta que la sincronizacion real.
+  var cuenta = '';
+  try { cuenta = Session.getEffectiveUser().getEmail(); } catch(e) {}
   try {
     var res = _sincronizarCorreosConReintento(params);
     var dur = Date.now() - t0;
     if (res && res.error) {
-      _auditar('sincronizacion', 'sincronizar', 'error', 'error', res.error, dur);
+      _auditar('sincronizacion', 'sincronizar', 'error', 'error', res.error + ' (cuenta: ' + cuenta + ')', dur);
     } else {
       _auditar('sincronizacion', 'sincronizar', 'ok', 'info',
         (res && res.agregados || 0) + ' nuevos, ' + (res && res.omitidos || 0) + ' omitidos, ' +
-        (res && res.parcial ? 'parcial' : 'completo'), dur);
+        (res && res.parcial ? 'parcial' : 'completo') + ' (cuenta: ' + cuenta + ')', dur);
     }
     return res;
   } catch(e) {
@@ -702,8 +711,16 @@ function _sincronizarCorreosImpl(params) {
     }
   }
 
-  var nextOffset = startOffset + threads.length;
-  var hayMas     = threads.length >= maxMessages;
+  // nextOffset avanza SOLO por los hilos que de verdad se revisaron en este
+  // lote (threadsVisto <= maxMessages), no por threads.length: la busqueda pide
+  // maxMessages + 2 hilos para saber si hay mas, pero el bucle de arriba solo
+  // recorre los primeros maxMessages. Avanzar por threads.length (hasta
+  // maxMessages + 2) saltaba 2 hilos de cada pagina sin revisarlos nunca en esa
+  // pasada -- confirmado con datos reales el 01/10/2026: 4 correos de Qustodio
+  // quedaron retenidos 3,5 h aunque las pasadas completas los tenian delante.
+  // hayMas es true solo si la busqueda devolvio hilos que este lote no reviso.
+  var nextOffset = startOffset + threadsVisto;
+  var hayMas     = threads.length > maxMessages;
 
   if (!nuevos.length) {
     if (esMesActual && ultimaFecha) {
@@ -713,133 +730,63 @@ function _sincronizarCorreosImpl(params) {
     return { ok: true, agregados: 0, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: hayMas, nextOffset: nextOffset, ms: Date.now()-t0 };
   }
 
-  // ── 4. Adjuntos: uno por uno para evitar OOM con archivos grandes ──
-  // Presupuesto de tiempo real: si un lote con adjuntos pesados se acerca a
-  // maxMs, se corta AQUI (antes de insertar nada) y se devuelve un nextOffset
-  // que retoma desde el thread del primer mensaje no procesado — nunca se
-  // pierde ni se duplica nada porque esos mensajes simplemente no entran a
-  // "nuevos" en esta llamada y se re-detectan en la siguiente (idsExistentes
-  // no los tiene todavia).
+  // ── 4. Guardar mensaje por mensaje: adjuntos → solicitud → documentos ──
+  // Antes esto era todo-o-nada: se subian los adjuntos de TODOS los mensajes
+  // del lote y solo al final se insertaban las solicitudes en un unico POST.
+  // Si la ejecucion moria en silencio a mitad de camino (tiempo o memoria
+  // agotados -- Apps Script no deja atrapar eso con try/catch, ver la nota en
+  // _procesarDriveLinks), los adjuntos ya estaban en Storage pero NINGUNA
+  // solicitud del lote se guardaba, no quedaba error en bib_auditoria, y el
+  // siguiente intento volvia a empezar por el mismo mensaje. Confirmado el
+  // 01/10/2026 con datos reales: adjuntos de 3 correos subidos a Storage
+  // (13:58 y 14:23) sin fila en bib_solicitudes, y otros correos del mismo
+  // lote retenidos horas detras de ellos. Ahora cada mensaje se guarda
+  // completo antes de empezar el siguiente: lo ya guardado no se pierde si
+  // algo falla despues, y un mensaje que no logra terminar acaba guardandose
+  // sin adjuntos en vez de frenar a los demas indefinidamente (ver
+  // _guardarCorreoNuevo).
+  // Presupuesto de tiempo real: maxMs se revisa ENTRE mensajes; lo ya guardado
+  // se queda guardado y el resto se retoma desde nextOffset en la siguiente
+  // llamada (no se pierde ni se duplica nada: idsExistentes los descarta).
   var MAX_BYTES_SYNC = 40 * 1024 * 1024; // 40 MB por archivo (UrlFetchApp soporta hasta 50MB)
-  var cortadoPorTiempo = false;
-  var procesados = nuevos.length;
+  var cortadoPorTiempo  = false;
+  var primerNoProcesado = -1;
+  var fallidos          = 0;
+  var primerError       = null;
   for (var n = 0; n < nuevos.length; n++) {
     if (Date.now() - t0 > maxMs) {
-      cortadoPorTiempo = true;
-      procesados = n;
+      cortadoPorTiempo  = true;
+      primerNoProcesado = n;
       break;
     }
-    var item     = nuevos[n];
-    // 1. Adjuntos MIME + Drive adjuntos con botón nativo de Gmail
-    var adjuntos = item.msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
-    var itemDocs = _procesarAdjuntos(adjuntos, item.msgId, MAX_BYTES_SYNC, SUPABASE_URL, SUPABASE_KEY);
-    // 2. Links Drive en el cuerpo HTML (archivos compartidos como enlace)
-    var driveLinks = _extraerLinksDrive(item.msg.getBody());
-    if (driveLinks.length) {
-      itemDocs = itemDocs.concat(_procesarDriveLinks(driveLinks, item.msgId, MAX_BYTES_SYNC, SUPABASE_URL, SUPABASE_KEY));
+    var guardado = _guardarCorreoNuevo(nuevos[n], MAX_BYTES_SYNC, SUPABASE_URL, SUPABASE_KEY);
+    if (guardado.ok) {
+      idsExistentes[nuevos[n].msgId] = true;
+      if (guardado.nuevo) agregados++;
+    } else {
+      fallidos++;
+      if (!primerError) primerError = guardado.error;
     }
-    item._docs = itemDocs;
   }
 
   if (cortadoPorTiempo) {
-    var primerNoProcesado = nuevos[procesados];
-    nextOffset = startOffset + primerNoProcesado.threadIdx;
-    hayMas = true;
-    nuevos = nuevos.slice(0, procesados);
-    ultimaFecha = null; // el checkpoint no debe avanzar: quedaron mensajes de este mismo lote sin procesar
-    Logger.log('Sync cortado por maxMs (' + maxMs + 'ms) en mensaje ' + procesados + '/' + (procesados + (nuevos.length - procesados)) + '. nextOffset=' + nextOffset);
-    if (!nuevos.length) {
-      return { ok: true, agregados: 0, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: true, nextOffset: nextOffset, ms: Date.now()-t0 };
+    nextOffset  = startOffset + nuevos[primerNoProcesado].threadIdx;
+    hayMas      = true;
+    ultimaFecha = null; // quedaron mensajes de este lote sin procesar: el checkpoint no debe avanzar
+    Logger.log('Sync cortado por maxMs (' + maxMs + 'ms) en mensaje ' + primerNoProcesado + '/' + nuevos.length + '. nextOffset=' + nextOffset);
+  }
+
+  if (fallidos) {
+    ultimaFecha = null; // un mensaje que no se pudo guardar no puede quedar detras del checkpoint
+    _auditar('sincronizacion', 'guardar_solicitud', 'error', 'error',
+      fallidos + ' correo(s) no se pudieron guardar; primer error: ' + String(primerError).substring(0, 300));
+    if (!agregados) {
+      // Todos fallaron: devolver el error real para que el usuario lo vea
+      return { error: "Error al guardar correos: " + String(primerError).substring(0, 400) };
     }
   }
 
-  // ── 5. Insertar solicitudes en un único batch POST ────────────
-  var solRows = nuevos.map(function(item) {
-    return {
-      gmail_message_id: item.msgId,
-      fecha_recepcion:  item.fechaMsg.toISOString(),
-      remitente_nombre: item.remitenteRaw,
-      remitente_email:  item.emailRemit,
-      email_destino:    item.emailDestino,
-      tipo_remitente:   item.tipoRemitente,
-      asunto:           item.msg.getSubject() || "(sin asunto)",
-      cuerpo:           item.msg.getPlainBody().substring(0, 1000),
-      estado:           "pendiente"
-    };
-  });
-
-  var solRes = sbPostBatch(SUPABASE_URL, SUPABASE_KEY, "bib_solicitudes", solRows);
-
-  // Fallback individual si el batch falla (conflicto de unicidad, etc.)
-  var _primerError = null;
-  if (!Array.isArray(solRes)) {
-    _primerError = (solRes && solRes.error) ? solRes.error : JSON.stringify(solRes);
-    Logger.log("Batch solicitudes error: " + _primerError + " — reintentando individualmente");
-    solRes = nuevos.map(function(item, idx) {
-      var r = sbPost(SUPABASE_URL, SUPABASE_KEY, "bib_solicitudes", solRows[idx]);
-      if (!Array.isArray(r) && !_primerError) _primerError = (r && r.error) ? r.error : JSON.stringify(r);
-      return (Array.isArray(r) && r[0]) ? r[0] : null;
-    });
-    // Si todos fallaron, devolver el error real para que el usuario lo vea
-    var _guardados = solRes.filter(function(r) { return r !== null; }).length;
-    if (_guardados === 0 && _primerError) {
-      return { error: "Error al guardar correos: " + _primerError.substring(0, 400) };
-    }
-  }
-
-  // ── 6. Insertar documentos en un único batch POST ─────────────
-  // Correlación por gmail_message_id (no por posición): un INSERT masivo
-  // en Postgres suele devolver las filas en el mismo orden en que se
-  // enviaron, pero no es una garantía formal — un trigger futuro o un
-  // cambio de comportamiento de PostgREST podría romper esa suposición
-  // silenciosamente y adjuntar documentos a la solicitud equivocada.
-  var solPorMsgId = {};
-  (solRes || []).forEach(function(sol) { if (sol && sol.gmail_message_id) solPorMsgId[sol.gmail_message_id] = sol; });
-
-  var docRows = [];
-  for (var n2 = 0; n2 < nuevos.length; n2++) {
-    var sol = solPorMsgId[nuevos[n2].msgId];
-    var sid = sol && sol.id;
-    if (!sid) {
-      // Antes esto se saltaba en silencio: si la solicitud no se pudo
-      // correlacionar de vuelta a su gmail_message_id, sus adjuntos (ya
-      // subidos a Storage en el paso 4) quedaban huerfanos sin dejar
-      // ningun rastro de por que.
-      if ((nuevos[n2]._docs || []).length) {
-        _auditar('sincronizacion', 'correlacion_documentos', 'error', 'error',
-          'gmail_message_id=' + nuevos[n2].msgId + ' no se encontro en la respuesta del insert de bib_solicitudes -- ' +
-          (nuevos[n2]._docs.length) + ' adjunto(s) ya subidos a Storage no se insertaron en bib_documentos');
-      }
-      continue;
-    }
-    idsExistentes[nuevos[n2].msgId] = true;
-    agregados++;
-    (nuevos[n2]._docs || []).forEach(function(doc) {
-      docRows.push({ solicitud_id: sid, nombre_archivo: doc.nombre_archivo, tipo_mime: doc.tipo_mime, tamano_bytes: doc.tamano_bytes, storage_path: doc.storage_path });
-    });
-  }
-  if (docRows.length) {
-    var docRes = sbPostBatch(SUPABASE_URL, SUPABASE_KEY, "bib_documentos", docRows);
-    if (!Array.isArray(docRes)) {
-      // Antes el resultado de este batch se descartaba sin revisar --
-      // era la unica asimetria real frente al insert de bib_solicitudes
-      // (que sí tiene reintento individual) y la causa mas probable de
-      // los huerfanos de Storage: el archivo ya estaba subido, pero su
-      // fila en bib_documentos nunca llegaba a existir y nadie se enteraba.
-      var _docErr = (docRes && docRes.error) ? String(docRes.error) : JSON.stringify(docRes);
-      Logger.log('Batch documentos error: ' + _docErr + ' -- reintentando individualmente');
-      var _docsGuardados = 0;
-      docRows.forEach(function(fila) {
-        var r = sbPost(SUPABASE_URL, SUPABASE_KEY, 'bib_documentos', fila);
-        if (Array.isArray(r) && r[0]) _docsGuardados++;
-      });
-      var _docsOk = _docsGuardados === docRows.length;
-      _auditar('sincronizacion', 'insertar_documentos', _docsOk ? 'ok' : 'error', _docsOk ? 'advertencia' : 'error',
-        'Batch fallo (' + _docErr.substring(0, 300) + '); reintento individual: ' + _docsGuardados + '/' + docRows.length + ' documento(s) guardados');
-    }
-  }
-
-  // ── 7. Actualizar checkpoint ───────────────────────────────────
+  // ── 5. Actualizar checkpoint ───────────────────────────────────
   if (esMesActual && ultimaFecha) {
     sbPatch(SUPABASE_URL, SUPABASE_KEY, "bib_sync_estado?id=eq.1",
       { ultimo_sync_at: new Date().toISOString(), ultimo_message_date: ultimaFecha.toISOString() });
@@ -849,6 +796,120 @@ function _sincronizarCorreosImpl(params) {
   Logger.log("Sync lote " + startOffset + "→" + nextOffset + ": " + agregados + " nuevos, " + omitidos + " omitidos, " + rechazados + " rechazados. " + elapsed + "ms");
 
   return { ok: true, agregados: agregados, omitidos: omitidos, personal: rechazados, mes: mes, ano: ano, parcial: hayMas, nextOffset: nextOffset, ms: elapsed };
+}
+
+// ── Guardar UN correo nuevo completo (adjuntos → solicitud → documentos) ──
+// Devuelve { ok:true, nuevo:true|false } o { ok:false, error }.
+//
+// La sincronizacion recuerda entre ejecuciones cuantas veces intento ya este
+// mensaje (CacheService de script, hasta 6 h). Una ejecucion que muere de
+// forma abrupta (tiempo o memoria agotados) no puede dejar rastro de por que,
+// asi que el contador se anota ANTES de tocar adjuntos/Drive: es lo unico que
+// sobrevive para que la ejecucion siguiente sepa que este mensaje ya
+// provoco una muerte.
+//   Intentos 1 y 2:  completo (adjuntos + links de Drive + cuerpo). Dos, no
+//                    uno, para no degradar un mensaje por un fallo aislado.
+//   Intento 3:       sin adjuntos ni links de Drive -- la solicitud se guarda
+//                    para que al menos aparezca en la app; el operador puede
+//                    recuperar los adjuntos con Reprocesar.
+//   Intento 4 y mas: tampoco se lee el cuerpo del correo.
+// Si el cache no esta disponible o se vacia, el mensaje simplemente vuelve al
+// modo completo -- nunca se degrada por error.
+var _SYNC_INTENTOS_COMPLETO   = 2;
+var _SYNC_INTENTOS_SIN_CUERPO = 3;
+var _SYNC_TTL_INTENTOS_SEG    = 21600; // maximo que permite CacheService
+
+function _guardarCorreoNuevo(item, maxBytes, url, key) {
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); } catch(e) { /* sin cache: siempre modo completo */ }
+  var clave    = 'sync_intento_' + item.msgId;
+  var intentos = 0;
+  try { if (cache) intentos = parseInt(cache.get(clave) || '0', 10) || 0; } catch(e) {}
+  try { if (cache) cache.put(clave, String(intentos + 1), _SYNC_TTL_INTENTOS_SEG); } catch(e) {}
+
+  var conAdjuntos = intentos < _SYNC_INTENTOS_COMPLETO;
+  var conCuerpo   = intentos < _SYNC_INTENTOS_SIN_CUERPO;
+
+  var docs = [];
+  if (conAdjuntos) {
+    // 1. Adjuntos MIME + Drive adjuntos con botón nativo de Gmail
+    var adjuntos = item.msg.getAttachments({ includeGoogleDriveFiles: true, includeInlineImages: false });
+    docs = _procesarAdjuntos(adjuntos, item.msgId, maxBytes, url, key);
+    // 2. Links Drive en el cuerpo HTML (archivos compartidos como enlace)
+    var driveLinks = _extraerLinksDrive(item.msg.getBody());
+    if (driveLinks.length) {
+      docs = docs.concat(_procesarDriveLinks(driveLinks, item.msgId, maxBytes, url, key));
+    }
+  }
+
+  var fila = {
+    gmail_message_id: item.msgId,
+    fecha_recepcion:  item.fechaMsg.toISOString(),
+    remitente_nombre: item.remitenteRaw,
+    remitente_email:  item.emailRemit,
+    email_destino:    item.emailDestino,
+    tipo_remitente:   item.tipoRemitente,
+    asunto:           item.msg.getSubject() || "(sin asunto)",
+    cuerpo:           conCuerpo ? item.msg.getPlainBody().substring(0, 1000) : "",
+    estado:           "pendiente"
+  };
+
+  var r   = sbPost(url, key, "bib_solicitudes", fila);
+  var sol = (Array.isArray(r) && r[0]) ? r[0] : null;
+  if (!sol) {
+    var errTxt = (r && r.error) ? String(r.error) : JSON.stringify(r);
+    // 23505 = unique_violation sobre gmail_message_id (sql/020): otra ejecucion
+    // (el trigger o el boton manual) ya guardo este mismo mensaje -- no es un fallo.
+    if (/23505|duplicate key/i.test(errTxt)) {
+      try { if (cache) cache.remove(clave); } catch(e) {}
+      return { ok: true, nuevo: false };
+    }
+    Logger.log('Error guardando solicitud ' + item.msgId + ': ' + errTxt);
+    return { ok: false, error: item.msgId + ': ' + errTxt };
+  }
+
+  if (docs.length) {
+    // Mismas claves en todas las filas (PostgREST PGRST102), igual que
+    // _upsertSolicitudDesdeMensaje. drive_link se conserva: antes esta ruta
+    // lo descartaba y un adjunto de Drive "no accesible" o nativo de Google
+    // quedaba como documento sin archivo y sin forma de abrirlo.
+    var docRows = docs.map(function(d) {
+      return {
+        solicitud_id:   sol.id,
+        nombre_archivo: d.nombre_archivo || null,
+        tipo_mime:      d.tipo_mime      || null,
+        tamano_bytes:   d.tamano_bytes   || 0,
+        storage_path:   d.storage_path   || null,
+        drive_link:     d.drive_link     || null
+      };
+    });
+    var docRes = sbPostBatch(url, key, "bib_documentos", docRows);
+    if (!Array.isArray(docRes)) {
+      // El resultado de este batch se descartaba sin revisar --
+      // era la unica asimetria real frente al insert de bib_solicitudes
+      // (que sí tiene reintento individual) y la causa mas probable de
+      // los huerfanos de Storage: el archivo ya estaba subido, pero su
+      // fila en bib_documentos nunca llegaba a existir y nadie se enteraba.
+      var _docErr = (docRes && docRes.error) ? String(docRes.error) : JSON.stringify(docRes);
+      Logger.log('Batch documentos error: ' + _docErr + ' -- reintentando individualmente');
+      var _docsGuardados = 0;
+      docRows.forEach(function(fila2) {
+        var rd = sbPost(url, key, 'bib_documentos', fila2);
+        if (Array.isArray(rd) && rd[0]) _docsGuardados++;
+      });
+      var _docsOk = _docsGuardados === docRows.length;
+      _auditar('sincronizacion', 'insertar_documentos', _docsOk ? 'ok' : 'error', _docsOk ? 'advertencia' : 'error',
+        item.msgId + ': batch fallo (' + _docErr.substring(0, 300) + '); reintento individual: ' + _docsGuardados + '/' + docRows.length + ' documento(s) guardados');
+    }
+  }
+
+  try { if (cache) cache.remove(clave); } catch(e) {}
+  if (!conAdjuntos) {
+    _auditar('sincronizacion', 'guardar_sin_adjuntos', 'error', 'advertencia',
+      item.msgId + ' (' + (fila.asunto || '').substring(0, 80) + '): se guardo SIN adjuntos' + (conCuerpo ? '' : ' ni cuerpo') +
+      ' porque ' + intentos + ' intento(s) anterior(es) no lograron terminar. Usar Reprocesar para recuperar los adjuntos.');
+  }
+  return { ok: true, nuevo: true };
 }
 
 // ============================================================
@@ -3264,6 +3325,69 @@ function _procesarAdjuntos(adjuntos, msgId, maxBytes, supabaseUrl, supabaseKey) 
     }
   }
   return docs;
+}
+
+// ── Diagnóstico de sincronización (ejecutar A MANO desde el editor) ──
+// Para cuando "un correo no aparece": corre la MISMA busqueda que la
+// sincronizacion y, ademas, una busqueda de bandeja, y compara ambas contra
+// bib_solicitudes. Asi se ve si Gmail no le entrega el correo a la
+// sincronizacion (aparece solo en la bandeja) o si se lo entrega y el
+// problema esta en guardarlo (aparece en las dos y falta en la BD).
+// IMPORTANTE: GmailApp lee el buzon de la cuenta con la que CORRE el script,
+// no el de quien lo escribio. Desde el editor corre con la cuenta que tiene
+// abierto el editor; desde la app (accion "diagnosticarSincronizacion" en
+// despachar) corre con la cuenta de la sincronizacion real. El encabezado del
+// resultado dice cual fue ("cuenta=...") -- si no es la cuenta donde llegan las
+// solicitudes de impresion, el resultado no sirve para este caso.
+// Solo lee Gmail/Supabase; lo unico que escribe es UNA fila de resumen en
+// bib_auditoria (modulo 'sincronizacion', accion 'diagnostico_gmail') para poder
+// consultar el resultado sin depender del registro de la ejecucion.
+function diagnosticarSincronizacion(horas) {
+  horas = horas || 24;
+  var cuenta = Session.getEffectiveUser().getEmail();
+  Logger.log('=== Cuenta con la que corre este diagnostico: ' + cuenta);
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  var desde = new Date(Date.now() - horas * 3600 * 1000);
+  var diaBusqueda = new Date(desde.getTime() - 24 * 3600 * 1000);
+  var f = diaBusqueda.getFullYear() + '/' + String(diaBusqueda.getMonth() + 1).padStart(2, '0') + '/' + String(diaBusqueda.getDate()).padStart(2, '0');
+  var enBD = {};
+  var filas = sbGet(_url, _key, 'bib_solicitudes?select=gmail_message_id&gmail_message_id=not.is.null&fecha_recepcion=gte.' + desde.toISOString() + '&limit=5000');
+  if (Array.isArray(filas)) filas.forEach(function(r) { enBD[r.gmail_message_id] = true; });
+  var consultas = [
+    { nombre: 'SYNC',    q: '-in:sent -in:trash -in:drafts after:' + f },
+    { nombre: 'BANDEJA', q: 'in:inbox after:' + f }
+  ];
+  var vistos = {}; // msgId -> { fecha, de, asunto, en: {SYNC:bool, BANDEJA:bool} }
+  var hilos  = {};
+  consultas.forEach(function(c) {
+    var threads = GmailApp.search(c.q, 0, 200);
+    hilos[c.nombre] = threads.length;
+    threads.forEach(function(th) {
+      th.getMessages().forEach(function(m) {
+        if (m.getDate() < desde) return;
+        var id = m.getId();
+        if (!vistos[id]) vistos[id] = { fecha: m.getDate(), de: m.getFrom(), asunto: m.getSubject(), en: {} };
+        vistos[id].en[c.nombre] = true;
+      });
+    });
+  });
+  var ids = Object.keys(vistos).sort(function(a, b) { return vistos[b].fecha - vistos[a].fecha; });
+  var faltan = [];
+  var lineasFaltan = [];
+  ids.forEach(function(id) {
+    var v = vistos[id];
+    var estado = enBD[id] ? 'en BD   ' : 'FALTA   ';
+    var linea = Utilities.formatDate(v.fecha, Session.getScriptTimeZone(), 'dd/MM HH:mm') +
+      ' | SYNC=' + (v.en.SYNC ? 'si' : 'NO') + ' BANDEJA=' + (v.en.BANDEJA ? 'si' : 'NO') +
+      ' | ' + id + ' | ' + String(v.de).substring(0, 40) + ' | ' + String(v.asunto).substring(0, 50);
+    if (!enBD[id]) { faltan.push(id); lineasFaltan.push(linea); }
+    Logger.log(estado + '| ' + linea);
+  });
+  Logger.log('=== Cuenta: ' + cuenta + ' | Hilos: SYNC=' + hilos.SYNC + ' BANDEJA=' + hilos.BANDEJA + ' | mensajes en ventana: ' + ids.length + ' | faltan en BD: ' + faltan.length);
+  _auditar('sincronizacion', 'diagnostico_gmail', 'ok', 'info',
+    ('cuenta=' + cuenta + ' | hilos SYNC=' + hilos.SYNC + ' BANDEJA=' + hilos.BANDEJA +
+     ' | mensajes=' + ids.length + ' | faltan=' + faltan.length + '\n' + lineasFaltan.join('\n')).substring(0, 3500));
+  return { cuenta: cuenta, hilos: hilos, mensajes: ids.length, faltan: faltan };
 }
 
 // ── Diagnóstico: solicitudes sin documentos ───────────────────
