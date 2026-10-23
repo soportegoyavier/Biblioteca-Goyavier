@@ -1594,6 +1594,7 @@ function sbStorageUpload(url, key, path, mime, bytes) {
       url + "/storage/v1/object/biblioteca-adjuntos/" + encodedPath, {
         method:  "POST",
         headers: {
+          "apikey":        key,
           "Authorization": "Bearer " + key,
           "Content-Type":  mime || "application/octet-stream",
           "x-upsert":      "true"
@@ -2982,6 +2983,60 @@ function reprocesarCorreo(gmailMsgId) {
   }
 }
 
+// Recupera los adjuntos que quedaron SIN ARCHIVO (storage_path y drive_link nulos) porque la
+// subida a Storage falló (p. ej. 2026-10-21/22: la subida no mandaba la cabecera `apikey` y con
+// las claves nuevas sb_secret_ Storage respondía 400, mientras la fila sí se guardaba).
+// A diferencia de reprocesarCorreo, NO borra ni recrea filas: solo rellena storage_path de la fila
+// existente, así se conservan los ajustes de impresión y los estados. Se puede correr varias veces
+// (solo toca filas aún sin archivo) y corta antes del límite de 6 min de Apps Script.
+// Ejecutar desde el editor: recuperarAdjuntosFaltantes()  (opcional: desdeISO '2026-10-21').
+function recuperarAdjuntosFaltantes(desdeISO) {
+  var t0 = Date.now(), LIMITE_MS = 4.5 * 60 * 1000, MAX_BYTES = 40 * 1024 * 1024;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) throw new Error('Ya hay una sincronización en curso. Intenta de nuevo en unos segundos.');
+  try {
+    var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+    var desde = desdeISO || '2026-10-21';
+    var docs = sbGet(_url, _key,
+      'bib_documentos?select=id,nombre_archivo,tipo_mime,solicitud_id,bib_solicitudes(gmail_message_id)' +
+      '&storage_path=is.null&drive_link=is.null&created_at=gte.' + encodeURIComponent(desde) + '&order=created_at.asc&limit=200');
+    if (!Array.isArray(docs)) { Logger.log('Error consultando bib_documentos: ' + JSON.stringify(docs)); return; }
+
+    var recuperados = 0, noEncontrados = 0, fallidos = 0, pendientes = 0, cacheMsg = {};
+    for (var i = 0; i < docs.length; i++) {
+      if (Date.now() - t0 > LIMITE_MS) { pendientes = docs.length - i; break; }
+      var d = docs[i];
+      var msgId = d.bib_solicitudes && d.bib_solicitudes.gmail_message_id;
+      if (!msgId || !d.nombre_archivo) { noEncontrados++; continue; }
+      try {
+        if (!cacheMsg[msgId]) {
+          var msg = GmailApp.getMessageById(msgId);
+          cacheMsg[msgId] = msg ? msg.getAttachments() : [];
+        }
+        var att = null, adj = cacheMsg[msgId];
+        for (var a = 0; a < adj.length; a++) { if (adj[a].getName() === d.nombre_archivo) { att = adj[a]; break; } }
+        if (!att) { noEncontrados++; Logger.log('No está entre los adjuntos de Gmail (¿link de Drive?): ' + d.nombre_archivo + ' [' + msgId + ']'); continue; }
+        if (att.getSize() > MAX_BYTES) { noEncontrados++; Logger.log('Omitido (>40MB): ' + d.nombre_archivo); continue; }
+        var nom  = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, '_');
+        var path = msgId + '/' + nom;
+        var mime = att.getContentType() || d.tipo_mime || 'application/octet-stream';
+        if (!sbStorageUpload(_url, _key, path, mime, att.getBytes())) { fallidos++; Logger.log('Subida fallida: ' + d.nombre_archivo); continue; }
+        if (!sbPatch(_url, _key, 'bib_documentos?id=eq.' + d.id, { storage_path: path })) { fallidos++; Logger.log('Subió pero no se pudo actualizar la fila id=' + d.id); continue; }
+        recuperados++;
+      } catch (e) {
+        fallidos++;
+        Logger.log('Error con ' + d.nombre_archivo + ': ' + e.toString());
+      }
+    }
+    var resumen = recuperados + ' recuperado(s), ' + noEncontrados + ' no encontrado(s), ' + fallidos + ' fallido(s), ' + pendientes + ' pendiente(s) (volver a correr)';
+    Logger.log('=== recuperarAdjuntosFaltantes: ' + resumen);
+    _auditar('mantenimiento', 'recuperar_adjuntos_faltantes', fallidos ? 'error' : 'ok', fallidos ? 'advertencia' : 'info', resumen, Date.now() - t0);
+    return { recuperados: recuperados, noEncontrados: noEncontrados, fallidos: fallidos, pendientes: pendientes };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // Atajo sin argumentos para ejecutar desde el editor GAS
 function reprocesarDesdeJunio24() { reprocesarDesde('2026/06/23'); }
 
@@ -3196,7 +3251,7 @@ function _procesarAdjuntos(adjuntos, msgId, maxBytes, supabaseUrl, supabaseKey) 
       var path  = msgId + "/" + nom;
       var resp  = UrlFetchApp.fetch(supabaseUrl + "/storage/v1/object/biblioteca-adjuntos/" + path.split("/").map(encodeURIComponent).join("/"), {
         method: "POST", muteHttpExceptions: true,
-        headers: { "Authorization": "Bearer " + supabaseKey, "Content-Type": mime, "x-upsert": "true" },
+        headers: { "apikey": supabaseKey, "Authorization": "Bearer " + supabaseKey, "Content-Type": mime, "x-upsert": "true" },
         payload: bytes
       });
       bytes = null;
@@ -3286,7 +3341,7 @@ function _procesarDriveLinks(driveLinks, msgId, maxBytes, supabaseUrl, supabaseK
       var dPath = msgId + "/drive_" + dl.id + "_" + dNom;
       var dResp = UrlFetchApp.fetch(supabaseUrl + "/storage/v1/object/biblioteca-adjuntos/" + dPath.split("/").map(encodeURIComponent).join("/"), {
         method:"POST", muteHttpExceptions:true,
-        headers:{"Authorization":"Bearer "+supabaseKey,"Content-Type":dMime,"x-upsert":"true"},
+        headers:{"apikey":supabaseKey,"Authorization":"Bearer "+supabaseKey,"Content-Type":dMime,"x-upsert":"true"},
         payload:dBytes
       });
       dBytes = null;
