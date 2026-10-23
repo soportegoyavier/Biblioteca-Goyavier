@@ -123,6 +123,7 @@ function despachar(p) {
     case "reintentarCorreoFallido": return _reintentarCorreoFallido(p.id);
     case "generarReporteManual":   return _exportarMes(parseInt(p.ano), parseInt(p.mes));
     case "eliminarSolicitud":      return _eliminarSolicitud(p.id, p.motivo);
+    case "bloquearRemitente":      return _bloquearRemitente(p.id, p.motivo, p.borrarTodos, email, p.correo);
     case "archivarAdjuntosAntiguos": return archivarAdjuntosAntiguos();
     case "responderCorreo":        return _responderCorreo(p.gmailMessageId, p.mensaje);
     case "zaikoListarCopiasLibro": return zaikoListarCopiasLibro(p);
@@ -633,6 +634,18 @@ function _sincronizarCorreosImpl(params) {
     if (Array.isArray(rn)) rn.forEach(function(r) { if (r.gmail_message_id) idsIgnorados[r.gmail_message_id] = true; });
   } catch(ex) { /* continúa sin lista de ignorados */ }
 
+  // Remitentes bloqueados como spam (bib_remitentes_bloqueados, ver sql/042). Si la tabla no existe
+  // o falla la lectura, la sincronizacion sigue igual que antes (nunca debe frenarla).
+  var bloqueados = {};
+  var bloqueadosLista = [];
+  try {
+    var rbq = sbGet(SUPABASE_URL, SUPABASE_KEY, "bib_remitentes_bloqueados?select=email&order=created_at.desc");
+    if (Array.isArray(rbq)) rbq.forEach(function(r) {
+      var eb = String(r.email || "").trim().toLowerCase();
+      if (validarEmail(eb) && !listaBlanca[eb]) { bloqueados[eb] = true; bloqueadosLista.push(eb); }
+    });
+  } catch(ex) { /* continúa sin bloqueados */ }
+
   // ── 2. Buscar threads (paginado) ──────────────────────────────
   function fmtGmail(d) {
     return d.getFullYear() + "/" + String(d.getMonth() + 1).padStart(2, "0") + "/" + String(d.getDate()).padStart(2, "0");
@@ -645,6 +658,9 @@ function _sincronizarCorreosImpl(params) {
   // Busca todo el correo recibido (no solo inbox) para capturar correos personales/externos
   // que pueden estar en etiquetas distintas a la bandeja de entrada
   var baseQuery = "-in:sent -in:trash -in:drafts";
+  // Que Gmail ni siquiera devuelva el spam bloqueado (asi no llena los lotes de 8 hilos). Tope de 40
+  // direcciones para no alargar de mas la consulta; el filtro de abajo cubre el resto.
+  bloqueadosLista.slice(0, 40).forEach(function(b) { baseQuery += " -from:" + b; });
 
   if (esMesActual) {
     var syncRes   = sbGet(SUPABASE_URL, SUPABASE_KEY, "bib_sync_estado?id=eq.1&select=ultimo_message_date");
@@ -700,6 +716,8 @@ function _sincronizarCorreosImpl(params) {
       var remitenteRaw  = msg.getFrom();
       var emailMatch    = remitenteRaw.match(/<([^>]+)>/);
       var emailRemit    = emailMatch ? emailMatch[1].trim().toLowerCase() : remitenteRaw.trim().toLowerCase();
+      // Spam bloqueado: no se guarda (el checkpoint ya avanzó arriba, igual que con los ya existentes)
+      if (bloqueados[emailRemit]) { omitidos++; continue; }
       // Clasificación automática: whitelist → institucional/general; resto → personal
       var tipoRemitente = listaBlanca[emailRemit] || 'personal';
       if (!listaBlanca[emailRemit]) rechazados++; // conteo informativo (no institucional)
@@ -2196,6 +2214,79 @@ function _eliminarSolicitud(solicitudId, motivo) {
   _auditar('correo', 'eliminar_solicitud', 'ok', 'info',
     'Solicitud id=' + solicitudId + ' eliminada (' + (storageRes.borrados || 0) + ' archivo(s) de Storage borrados)');
   return { ok: true };
+}
+
+// ── Marcar como spam: bloquea al remitente y elimina el correo ──
+// Guarda la direccion EXACTA en bib_remitentes_bloqueados (nunca el dominio: el colegio
+// comparte @colegiogoyavier.edu.co) y elimina la solicitud como "Eliminar". La sincronizacion
+// ya no pide ni guarda correos de esa direccion (ver _sincronizarCorreosImpl).
+// borrarTodos: ademas elimina los demas correos PENDIENTES de ese mismo remitente en Ventas
+// (tipo 'personal'); se hace de a MAX_LOTE por llamada (cada borrado toca Storage + varias
+// tablas) y devuelve `restantes` para que el navegador vuelva a llamar hasta llegar a 0.
+function _bloquearRemitente(solicitudId, motivo, borrarTodos, bloqueadoPor, correoContinuacion) {
+  var _url = _cfg('SUPABASE_URL'), _key = _cfg('SUPABASE_KEY');
+  if (!_url || !_key) return { ok: false, error: 'Faltan credenciales de Supabase' };
+  var MAX_LOTE = 10; // cada borrado toca Storage + varias tablas (~3 s); gasCall abandona a los 50 s
+  var correo = '', asuntoEj = '';
+
+  if (solicitudId) {
+    var sol = sbGet(_url, _key, 'bib_solicitudes?id=eq.' + encodeURIComponent(solicitudId) + '&select=remitente_email,asunto');
+    if (!Array.isArray(sol) || !sol[0]) return { ok: false, error: 'Solicitud id=' + solicitudId + ' no encontrada' };
+    correo = String(sol[0].remitente_email || '').trim().toLowerCase();
+    asuntoEj = sol[0].asunto || '';
+  } else if (correoContinuacion) {
+    // Llamada de continuacion (quedaban mas correos del mismo remitente): la solicitud original ya se borro.
+    correo = String(correoContinuacion).trim().toLowerCase();
+  } else {
+    return { ok: false, error: 'solicitudId o correo requerido' };
+  }
+  return _bloquearRemitenteImpl(_url, _key, solicitudId, correo, asuntoEj, motivo, borrarTodos, bloqueadoPor, MAX_LOTE);
+}
+
+function _bloquearRemitenteImpl(_url, _key, solicitudId, correo, asuntoEj, motivo, borrarTodos, bloqueadoPor, MAX_LOTE) {
+  if (!correo || !validarEmail(correo)) {
+    return { ok: false, error: 'Este correo no tiene una direccion de remitente valida; no se puede bloquear. Usa Eliminar normal.' };
+  }
+  // Nunca bloquear la propia cuenta de Biblioteca ni a un remitente autorizado (lista blanca).
+  var propio = '';
+  try { propio = Session.getEffectiveUser().getEmail().toLowerCase(); } catch (e) {}
+  if (propio && correo === propio) return { ok: false, error: 'Es la propia cuenta de Biblioteca; no se puede bloquear.' };
+  var aut = sbGet(_url, _key, 'bib_remitentes_autorizados?select=email&activo=eq.true&email=eq.' + encodeURIComponent(correo));
+  if (Array.isArray(aut) && aut.length) {
+    return { ok: false, error: correo + ' es un remitente AUTORIZADO (lista blanca); no se bloquea. Si de verdad es spam, primero quitalo de autorizados.' };
+  }
+
+  var ins = UrlFetchApp.fetch(_url + '/rest/v1/bib_remitentes_bloqueados?on_conflict=email', {
+    method: 'POST',
+    headers: { apikey: _key, Authorization: 'Bearer ' + _key, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+    payload: JSON.stringify({ email: correo, motivo: motivo || 'Spam', asunto_ejemplo: String(asuntoEj || '').substring(0, 200), bloqueado_por: bloqueadoPor || null }),
+    muteHttpExceptions: true
+  });
+  if (ins.getResponseCode() >= 400) {
+    return { ok: false, error: 'No se pudo guardar el bloqueo: ' + ins.getContentText().substring(0, 200) };
+  }
+
+  var eliminados = 0;
+  if (solicitudId) {
+    var r0 = _eliminarSolicitud(solicitudId, 'Spam: remitente bloqueado');
+    if (!r0.ok && r0.error && !/no encontrada/i.test(r0.error)) return { ok: false, error: 'Bloqueado, pero no se pudo eliminar el correo: ' + r0.error };
+    if (r0.ok) eliminados++;
+  }
+
+  var restantes = 0;
+  if (borrarTodos) {
+    var otros = sbGet(_url, _key, 'bib_solicitudes?select=id&remitente_email=eq.' + encodeURIComponent(correo) +
+      '&tipo_remitente=eq.personal&estado=eq.pendiente&order=id.asc&limit=' + (MAX_LOTE + 1));
+    otros = Array.isArray(otros) ? otros : [];
+    restantes = Math.max(0, otros.length - MAX_LOTE);
+    otros.slice(0, MAX_LOTE).forEach(function(o) {
+      var r = _eliminarSolicitud(o.id, 'Spam: remitente bloqueado');
+      if (r.ok) eliminados++;
+    });
+  }
+
+  _auditar('correo', 'bloquear_remitente', 'ok', 'info', correo + ' bloqueado; ' + eliminados + ' correo(s) eliminado(s)' + (restantes ? ' (quedan más por borrar)' : ''));
+  return { ok: true, correo: correo, eliminados: eliminados, restantes: restantes };
 }
 
 // ── Limpieza ÚNICA de huérfanos sin dueño ─────────────────────

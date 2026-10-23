@@ -255,7 +255,10 @@
             <i class="fa fa-magnifying-glass" style="color:var(--dim);font-size:12px"></i>
             <input type="text" id="inp-buscar-ventas" placeholder="Buscar..." oninput="buscarVentasDebounce()">
           </div>
-          <button class="btn btn-primary" onclick="abrirModalNuevaSolicitudManual()" style="margin-left:auto;white-space:nowrap">
+          <button class="btn btn-ghost" onclick="abrirModalBloqueados()" style="margin-left:auto;white-space:nowrap" title="Remitentes bloqueados como spam">
+            <i class="fa fa-ban fa-sm"></i> Bloqueados
+          </button>
+          <button class="btn btn-primary" onclick="abrirModalNuevaSolicitudManual()" style="white-space:nowrap">
             <i class="fa fa-plus fa-sm"></i> Manual
           </button>
         </div>
@@ -807,6 +810,24 @@
   </div>
 </div>
 
+<!-- MODAL REMITENTES BLOQUEADOS (spam) -->
+<div class="mo" id="modal-bloqueados">
+  <div class="mc" style="max-width:560px">
+    <div class="mh">
+      <div class="mh-ico red"><i class="fa fa-ban" style="color:var(--red)"></i></div>
+      <div class="mh-info">
+        <h3>Remitentes bloqueados</h3>
+        <div class="mh-sub" style="color:var(--muted);font-size:12px">La sincronización no trae correos de estas direcciones</div>
+      </div>
+      <button class="btn-cls" onclick="cerrarModal('modal-bloqueados')"><i class="fa fa-xmark"></i></button>
+    </div>
+    <div class="mb" id="bloqueados-list" style="max-height:60vh;overflow:auto"></div>
+    <div class="mf">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-bloqueados')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL ELIMINAR CORREO -->
 <div class="mo" id="modal-eliminar">
   <div class="mc" style="max-width:440px">
@@ -833,6 +854,18 @@
           <option value="Contenido irrelevante">Contenido irrelevante</option>
           <option value="Correo duplicado">Correo duplicado</option>
         </select>
+      </div>
+      <!-- Solo visible para remitentes "personales" con dirección válida (ver abrirModalEliminar) -->
+      <div id="melim-spam-box" style="display:none;margin-top:14px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:rgba(220,53,69,.06)">
+        <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;margin:0">
+          <input type="checkbox" id="melim-spam" onchange="toggleSpamEliminar()" style="margin-top:3px">
+          <span><strong><i class="fa fa-ban fa-sm" style="color:var(--red)"></i> Es spam: bloquear a este remitente</strong><br>
+            <span style="font-size:12.5px;color:var(--muted)">La sincronización dejará de traer correos de <b id="melim-spam-correo">—</b>. Se bloquea solo esa dirección, no el dominio.</span></span>
+        </label>
+        <label id="melim-spam-todos-wrap" style="display:none;gap:10px;align-items:flex-start;cursor:pointer;margin:10px 0 0 24px">
+          <input type="checkbox" id="melim-spam-todos" style="margin-top:3px">
+          <span style="font-size:12.5px">También eliminar los otros <b id="melim-spam-n">0</b> correos pendientes de este remitente en Ventas</span>
+        </label>
       </div>
     </div>
     <div class="mf">
@@ -1373,6 +1406,6 @@
 <script src="js/colaboradores.js?v=9"></script>
 <script src="js/materiales.js?v=15"></script>
 <script src="js/auditoria.js?v=5"></script>
-<script src="js/modals.js?v=10"></script>
+<script src="js/modals.js?v=11"></script>
 </body>
 </html>
