@@ -2958,7 +2958,7 @@ function archivarAdjuntosAntiguos() {
     var inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
 
     var docs = sbGet(_url, _key,
-      'bib_documentos?select=id,storage_path,nombre_archivo,bib_solicitudes!inner(fecha_recepcion,estado)' +
+      'bib_documentos?select=id,solicitud_id,storage_path,nombre_archivo,bib_solicitudes!inner(fecha_recepcion,estado)' +
       '&storage_path=not.is.null' +
       '&bib_solicitudes.estado=in.(entregado,cancelado)' +
       '&bib_solicitudes.fecha_recepcion=lt.' + inicioMes
@@ -2977,11 +2977,13 @@ function archivarAdjuntosAntiguos() {
   // simplemente le toma varios dias ponerse al dia, sin apuro real.
   var MAX_MS = 35 * 1000;
   var archivados = 0, errores = 0, procesados = 0;
+  var rutasHechas = {}; // rutas ya movidas a Drive en este ciclo (las filas hermanas se actualizan en bloque)
 
   for (var i = 0; i < docs.length; i++) {
     if (Date.now() - t0 > MAX_MS) break;
     procesados++;
     var d = docs[i];
+    if (rutasHechas[d.storage_path]) continue;
     try {
       var fecha = new Date(d.bib_solicitudes.fecha_recepcion);
       var carpeta = _carpetaArchivoAdjuntos(fecha.getFullYear(), fecha.getMonth());
@@ -2991,12 +2993,27 @@ function archivarAdjuntosAntiguos() {
         headers: { apikey: _key, Authorization: 'Bearer ' + _key },
         muteHttpExceptions: true
       });
-      if (resp.getResponseCode() >= 400) throw new Error('Descarga de Storage fallo (' + resp.getResponseCode() + ')');
+      if (resp.getResponseCode() >= 400) {
+        // El archivo ya no esta en Storage. Caso tipico: otra fila con la MISMA ruta ya lo archivo a Drive y
+        // borro el original (antes solo se actualizaba la fila archivada y las hermanas quedaban apuntando a
+        // un archivo inexistente -> error fijo en cada corrida y avisos de la reconciliacion). Si la misma
+        // solicitud tiene una fila hermana con ese nombre ya en Drive, esta se une a ese enlace.
+        var herm = sbGet(_url, _key, 'bib_documentos?select=drive_link&solicitud_id=eq.' + d.solicitud_id +
+          '&nombre_archivo=eq.' + encodeURIComponent(d.nombre_archivo || '') + '&drive_link=not.is.null&limit=1');
+        if (Array.isArray(herm) && herm[0] && herm[0].drive_link &&
+            sbPatch(_url, _key, 'bib_documentos?id=eq.' + d.id, { storage_path: null, drive_link: herm[0].drive_link })) {
+          archivados++;
+          continue;
+        }
+        throw new Error('Descarga de Storage fallo (' + resp.getResponseCode() + ')');
+      }
 
       var blob = resp.getBlob().setName(d.nombre_archivo || ('archivo_' + d.id));
       var file = carpeta.createFile(blob);
 
-      var okPatch = sbPatch(_url, _key, 'bib_documentos?id=eq.' + d.id,
+      // TODAS las filas que apuntan a esta ruta (no solo esta): si se quedaran apuntando a Storage, al
+      // borrar el original abajo quedarian huerfanas.
+      var okPatch = sbPatch(_url, _key, 'bib_documentos?storage_path=eq.' + encodeURIComponent(d.storage_path),
         { storage_path: null, drive_link: file.getUrl() });
       if (!okPatch) throw new Error('No se pudo actualizar bib_documentos id=' + d.id);
 
@@ -3015,6 +3032,7 @@ function archivarAdjuntosAntiguos() {
         // limpiarHuerfanosSinDueno lo terminaria de borrar.
         Logger.log('Archivado OK pero no se borro de Storage id=' + d.id + ': ' + delResp.getContentText());
       }
+      rutasHechas[d.storage_path] = true;
       archivados++;
     } catch(e) {
       errores++;
@@ -3386,13 +3404,37 @@ function _upsertSolicitudDesdeMensaje(msg, _url, _key, listaBlanca) {
 
 // ── Sube adjuntos (MIME + Drive) uno por uno a Storage ───────
 // adjuntos = msg.getAttachments({includeGoogleDriveFiles:true})
+// La ruta en Storage es msgId + nombre, asi que dos adjuntos con el MISMO nombre en un mismo correo
+// caian en la misma ruta: el segundo pisaba al primero (si eran archivos distintos se perdia uno) y
+// quedaban filas duplicadas en bib_documentos que luego el archivado no podia resolver. Ahora:
+//   - mismo nombre y mismo tamano  -> es el mismo archivo repetido: se guarda UNA sola vez;
+//   - mismo nombre y otro tamano   -> archivo distinto: ruta propia "nombre (2).ext", sin pisar nada.
+// `usados` mapea ruta -> tamano dentro de UN mismo mensaje. Devuelve la ruta a usar, o null si es repetido.
+function _rutaAdjuntoUnica(msgId, nom, sz, usados) {
+  var ruta = msgId + "/" + nom;
+  if (usados[ruta] === undefined) { usados[ruta] = sz; return ruta; }
+  if (usados[ruta] === sz) return null;
+  var punto = nom.lastIndexOf('.');
+  var base = punto > 0 ? nom.substring(0, punto) : nom;
+  var ext  = punto > 0 ? nom.substring(punto) : '';
+  for (var n = 2; n < 200; n++) {
+    var cand = msgId + "/" + base + " (" + n + ")" + ext;
+    if (usados[cand] === undefined) { usados[cand] = sz; return cand; }
+    if (usados[cand] === sz) return null;
+  }
+  return null;
+}
+
 function _procesarAdjuntos(adjuntos, msgId, maxBytes, supabaseUrl, supabaseKey) {
   var docs = [];
+  var usados = {};
   for (var a = 0; a < adjuntos.length; a++) {
     var att  = adjuntos[a];
     var nom  = att.getName().replace(/[^a-zA-Z0-9._\-\s]/g, "_");
     var mime = att.getContentType() || 'application/octet-stream';
     var sz   = att.getSize();
+    var rutaUnica = _rutaAdjuntoUnica(msgId, nom, sz, usados);
+    if (rutaUnica === null) { Logger.log('Adjunto repetido omitido: ' + att.getName()); continue; }
     if (sz > maxBytes) {
       Logger.log('Omitido (>' + Math.round(sz/1024/1024) + 'MB): ' + att.getName());
       docs.push({ nombre_archivo: att.getName(), tipo_mime: mime, tamano_bytes: sz, storage_path: null });
@@ -3400,7 +3442,7 @@ function _procesarAdjuntos(adjuntos, msgId, maxBytes, supabaseUrl, supabaseKey) 
     }
     try {
       var bytes = att.getBytes();
-      var path  = msgId + "/" + nom;
+      var path  = rutaUnica;
       var resp  = UrlFetchApp.fetch(supabaseUrl + "/storage/v1/object/biblioteca-adjuntos/" + path.split("/").map(encodeURIComponent).join("/"), {
         method: "POST", muteHttpExceptions: true,
         headers: { "apikey": supabaseKey, "Authorization": "Bearer " + supabaseKey, "Content-Type": mime, "x-upsert": "true" },
